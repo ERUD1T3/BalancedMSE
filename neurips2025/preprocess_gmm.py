@@ -23,29 +23,16 @@ parser = argparse.ArgumentParser(description='Preprocess tabular data to fit a G
 
 # Dataset and Data Loading Args
 parser.add_argument('--dataset', type=str, required=True, 
-                    choices=['sep', 'sarcos', 'onp', 'bf', 'asc', 'ed'], # Add other dataset names corresponding to build_*_ds functions
+                    choices=['sep', 'sarcos', 'onp', 'bf', 'asc', 'ed'],
                     help='Name of the tabular dataset to preprocess.')
 parser.add_argument('--data_dir', type=str, default='C:/Users/the_3/Documents/github/BalancedMSE/neurips2025/data', help='Root directory containing dataset subfolders.')
 parser.add_argument('--train_split_name', type=str, default='training', 
                     help='Name convention for the training data file (e.g., {dataset}_{split_name}.csv)')
 
-# Model and Training related (kept for potential future use or consistency, but less relevant for GMM preprocessing)
-parser.add_argument('--model', type=str, default='mlp', help='Model name (less relevant for GMM preprocessing)') 
-parser.add_argument('--store_root', type=str, default='checkpoint', help='Root path for storing checkpoints, logs')
-parser.add_argument('--store_name', type=str, default='', help='Experiment store name')
-parser.add_argument('--gpu', type=int, default=None, help='GPU ID (not used in this script)')
-# parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'sgd'], help='Optimizer type') # Not used
-# parser.add_argument('--loss', type=str, default='mse', choices=['mse', 'l1', 'focal_l1', 'focal_mse', 'huber'], help='Training loss type') # Not used
-# parser.add_argument('--lr', type=float, default=1e-3, help='Initial learning rate') # Not used
-# parser.add_argument('--epoch', type=int, default=90, help='Number of epochs to train') # Not used
-# parser.add_argument('--momentum', type=float, default=0.9, help='Optimizer momentum') # Not used
-# parser.add_argument('--weight_decay', type=float, default=1e-4, help='Optimizer weight decay') # Not used
-# parser.add_argument('--schedule', type=int, nargs='*', default=[60, 80], help='LR schedule') # Not used
-
 # Data Loading Process Args
 parser.add_argument('--batch_size', type=int, default=256, help='Batch size for loading data to collect labels.')
-parser.add_argument('--workers', type=int, default=4, help='Number of workers used in data loading.') # Adjusted default
-parser.add_argument('--print_freq', type=int, default=100, help='Logging frequency.') # Adjusted default
+parser.add_argument('--workers', type=int, default=4, help='Number of workers used in data loading.')
+parser.add_argument('--print_freq', type=int, default=100, help='Logging frequency.')
 
 # Reweighting and LDS Args (passed to TabDS)
 parser.add_argument('--reweight', type=str, default='none', choices=['none', 'inverse', 'sqrt_inv'],
@@ -59,6 +46,8 @@ parser.add_argument('--lds_sigma', type=float, default=1, help='LDS gaussian/lap
 # GMM Specific Args
 parser.add_argument('--K', type=int, default=8, help='Number of components for the Gaussian Mixture Model.')
 parser.add_argument('--gmm_save_path', type=str, default='gmm_params.pkl', help='Path to save the fitted GMM parameters.')
+parser.add_argument('--store_root', type=str, default='checkpoint', help='Root path for storing GMM parameters')
+parser.add_argument('--store_name', type=str, default='', help='Experiment store name')
 
 
 def load_tabular_data(dataset_name: str, data_dir: str, split_name: str) -> Tuple[np.ndarray, np.ndarray]:
