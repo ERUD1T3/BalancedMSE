@@ -5,7 +5,7 @@ import logging
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal.windows import triang
-from typing import List, Dict, Any, Optional, Union, Tuple
+from typing import List, Dict, Any
 
 
 class AverageMeter(object):

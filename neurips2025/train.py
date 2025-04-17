@@ -44,6 +44,10 @@ parser.add_argument('--bucket_num', type=int, default=100, help='maximum bucket 
 parser.add_argument('--bucket_start', type=int, default=0, help='minimum(starting) bucket for FDS')
 parser.add_argument('--fds_mmt', type=float, default=0.9, help='FDS momentum')
 
+# Label value thresholds for data frequency categorization
+parser.add_argument('--lower_threshold', type=float, default=None, help='lower threshold value for label range (rare/low-shot data)')
+parser.add_argument('--upper_threshold', type=float, default=None, help='upper threshold value for label range (frequent/many-shot data)')
+
 # BMSE (Balanced MSE)
 parser.add_argument('--bmse', action='store_true', default=False, help='use Balanced MSE')
 parser.add_argument('--imp', type=str, default='gai', choices=['gai', 'bmc', 'bni'], help='implementation options')
@@ -81,7 +85,7 @@ parser.add_argument('--store_root', type=str, default='checkpoint', help='root p
 parser.add_argument('--store_name', type=str, default='', help='experiment store name')
 parser.add_argument('--gpu', type=int, default=None, help='GPU ID to use')
 parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'sgd'], help='optimizer type')
-parser.add_argument('--loss', type=str, default='l1', choices=['mse', 'l1', 'focal_l1', 'focal_mse', 'huber'],
+parser.add_argument('--loss', type=str, default='mse', choices=['mse', 'l1', 'focal_l1', 'focal_mse', 'huber'],
                     help='training loss type')
 parser.add_argument('--lr', type=float, default=1e-4, help='initial learning rate')
 parser.add_argument('--epoch', type=int, default=100, help='number of epochs to train')
@@ -722,7 +726,8 @@ def balanced_metrics(preds: Union[np.ndarray, torch.Tensor],
     return mean_mse, mean_l1
 
 
-def shot_metrics_balanced(preds: Union[np.ndarray, torch.Tensor], 
+def shot_metrics_balanced(
+        preds: Union[np.ndarray, torch.Tensor], 
                          labels: Union[np.ndarray, torch.Tensor], 
                          train_labels: List, 
                          many_shot_thr: int = 100, 

@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-from typing import Optional, Union, Literal
+from typing import Optional, Literal
 
 
 def weighted_mse_loss(inputs: torch.Tensor, targets: torch.Tensor, weights: Optional[torch.Tensor] = None) -> torch.Tensor:
