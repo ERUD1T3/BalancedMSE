@@ -267,7 +267,7 @@ def main() -> None:
 
         model.load_state_dict(state_dict, strict=True)
         print(f"===> Checkpoint '{ckpt_path}' loaded (epoch [{checkpoint['epoch']}]), testing...")
-        validate(test_loader, model, train_labels=train_labels_raw, prefix='Test')
+        validate(test_loader, model, prefix='Test')
         return
 
     # For retraining only the final layer (transfer learning)
@@ -403,18 +403,16 @@ def main() -> None:
         train_loss = train(train_loader, model, optimizer, epoch, criterion)
         
         # Evaluate on validation set
-        (val_loss_mse, val_loss_l1, val_loss_gmean, mean_MSE, mean_L1) = validate(
-            val_loader, model, train_labels=train_labels_raw)
+        (val_loss_mse, val_loss_l1, val_loss_gmean) = validate(
+            val_loader, model, prefix='Val')
 
         # Determine which metric to use for model selection
         loss_metric = val_loss_mse if args.loss == 'mse' else val_loss_l1
-        if args.balanced_metric:
-            loss_metric = mean_MSE if args.loss == 'mse' else mean_L1
             
         # Check if current model is the best so far
         is_best = loss_metric < args.best_loss
         args.best_loss = min(loss_metric, args.best_loss)
-        print(f"Best Validation {'Balanced ' if args.balanced_metric else ''}{'MSE' if 'mse' in args.loss else 'L1'} Loss: {args.best_loss:.4f}")
+        print(f"Best Validation {'MSE' if 'mse' in args.loss else 'L1'} Loss: {args.best_loss:.4f}")
         
         # Save checkpoint
         state_dict_to_save = model.state_dict()
@@ -428,16 +426,14 @@ def main() -> None:
         }, is_best, epoch + 1 == args.epoch)
         
         print(f"Epoch #{epoch}: Train loss [{train_loss:.4f}]; "
-              f"Val loss: MSE [{val_loss_mse:.4f}], L1 [{val_loss_l1:.4f}], G-Mean [{val_loss_gmean:.4f}], "
-              f"bMSE [{mean_MSE:.4f}], bL1 [{mean_L1:.4f}]")
+              f"Val loss: MSE [{val_loss_mse:.4f}], L1 [{val_loss_l1:.4f}], G-Mean [{val_loss_gmean:.4f}]")
 
         # Log metrics to TensorBoard
         tb_logger.log_value('train_loss', train_loss, epoch)
         tb_logger.log_value('val/loss_mse', val_loss_mse, epoch)
         tb_logger.log_value('val/loss_l1', val_loss_l1, epoch)
         tb_logger.log_value('val/loss_gmean', val_loss_gmean, epoch)
-        tb_logger.log_value('val/balanced_mse', mean_MSE, epoch)
-        tb_logger.log_value('val/balanced_l1', mean_L1, epoch)
+        
         for i, param_group in enumerate(optimizer.param_groups):
             tb_logger.log_value(f'lr/group_{i}', param_group['lr'], epoch)
         if args.bmse and not args.fix_noise_sigma and hasattr(criterion, 'noise_sigma'):
@@ -459,10 +455,10 @@ def main() -> None:
     model.load_state_dict(state_dict, strict=True)
 
     # Evaluate on test set
-    test_loss_mse, test_loss_l1, test_loss_gmean, mean_MSE, mean_L1 = validate(
-        test_loader, model, train_labels=train_labels_raw, prefix='Test')
-    print(
-        f"Test Results: bMSE [{mean_MSE:.4f}], bMAE [{mean_L1:.4f}], MSE [{test_loss_mse:.4f}], L1 [{test_loss_l1:.4f}], G-Mean [{test_loss_gmean:.4f}]\nDone")
+    test_loss_mse, test_loss_l1, test_loss_gmean = validate(
+        test_loader, model, prefix='Test')
+    
+    print(f"Test Results: MSE [{test_loss_mse:.4f}], L1 [{test_loss_l1:.4f}], G-Mean [{test_loss_gmean:.4f}]\nDone")
 
 
 def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Optimizer, epoch: int, criterion: nn.Module) -> float:
@@ -515,7 +511,7 @@ def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Opt
         if args.fds:
             predictions, _ = model(inputs, targets, epoch)
         else:
-            predictions, _ = model(inputs, labels=None, epoch=None)
+            predictions, _ = model(inputs, targets, epoch)
 
         predictions = predictions.squeeze(-1) if predictions.ndim > 1 and predictions.shape[-1] == 1 else predictions
         targets = targets.squeeze(-1) if targets.ndim > 1 and targets.shape[-1] == 1 else targets
@@ -561,7 +557,7 @@ def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Opt
                 else:
                     inputs, targets = inputs.cpu(), targets.cpu()
 
-                _, feature = model(inputs, labels=None, epoch=None)
+                _, feature = model(inputs, targets, epoch)
 
                 encodings.append(feature.detach().cpu().numpy())
                 labels_list.append(targets.detach().cpu().numpy())
