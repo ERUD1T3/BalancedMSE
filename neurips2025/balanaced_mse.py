@@ -39,8 +39,12 @@ class GAILoss(_Loss):
         return loss
 
 
-def gai_loss(pred: torch.Tensor, target: torch.Tensor, 
-             gmm: Dict[str, torch.Tensor], noise_var: torch.Tensor) -> torch.Tensor:
+def gai_loss(
+        pred: torch.Tensor, 
+        target: torch.Tensor, 
+        gmm: Dict[str, torch.Tensor], 
+        noise_var: torch.Tensor
+    ) -> torch.Tensor:
     """
     Gaussian Adaptive Importance loss function.
     
