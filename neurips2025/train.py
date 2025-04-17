@@ -587,17 +587,15 @@ def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Opt
 
 def validate(
         val_loader: DataLoader, 
-        model: nn.Module, 
-        train_labels: Optional[List] = None, 
+        model: nn.Module,  
         prefix: str = 'Val'
-    ) -> Tuple[float, float, float, float, float]:
+    ) -> Tuple[float, float, float]:
     """
     Evaluate the model on validation or test data.
     
     Args:
         val_loader: DataLoader for validation/test data
         model: The neural network model
-        train_labels: Labels from training set (used for shot metrics)
         prefix: Prefix for progress display ('Val' or 'Test')
         
     Returns:
@@ -605,8 +603,6 @@ def validate(
             - MSE loss average
             - L1 loss average
             - Geometric mean of losses
-            - Balanced MSE
-            - Balanced L1/MAE
     """
     # Initialize meters for tracking time and performance
     batch_time = AverageMeter('Time', ':6.3f')
@@ -660,49 +656,62 @@ def validate(
             if idx % args.print_freq == 0:
                 progress.display(idx)
 
-        # Calculate balanced metrics and shot-based metrics
-        mean_MSE, mean_L1 = balanced_metrics(np.hstack(preds_list), np.hstack(labels_list))
-        shot_dict = shot_metrics(np.hstack(preds_list), np.hstack(labels_list), train_labels)
-        shot_dict_balanced = shot_metrics_balanced(np.hstack(preds_list), np.hstack(labels_list), train_labels)
+        # Apply threshold-based metrics
+        metrics_dict = threshold_metrics(
+            np.hstack(preds_list), 
+            np.hstack(labels_list),
+            lower_threshold=args.lower_threshold,
+            upper_threshold=args.upper_threshold
+        )
         
         # Calculate geometric mean of all losses
         loss_gmean = gmean(np.hstack(all_losses_l1_for_gmean), axis=None).astype(float)
         
         # Print detailed performance metrics
-        print(f" * Overall: MSE {losses_mse.avg:.3f}\tL1 {losses_l1.avg:.3f}\tG-Mean {loss_gmean:.3f}")
+        print(f" * Overall: MSE {metrics_dict['overall']['mse']:.3f}\t"
+              f"L1 {metrics_dict['overall']['l1']:.3f}\t"
+              f"G-Mean {metrics_dict['overall']['gmean']:.3f}\t"
+              f"Count {metrics_dict['overall']['count']}")
         print('-' * 40)
-        print(f" * Many: MSE {shot_dict['many']['mse']:.3f}\t"
-              f"L1 {shot_dict['many']['l1']:.3f}\tG-Mean {shot_dict['many']['gmean']:.3f}")
-        print(f" * Median: MSE {shot_dict['median']['mse']:.3f}\t"
-              f"L1 {shot_dict['median']['l1']:.3f}\tG-Mean {shot_dict['median']['gmean']:.3f}")
-        print(f" * Low: MSE {shot_dict['low']['mse']:.3f}\t"
-              f"L1 {shot_dict['low']['l1']:.3f}\tG-Mean {shot_dict['low']['gmean']:.3f}")
-        print('=' * 40)
-        print(f" * bMSE {mean_MSE:.3f}\tbMAE {mean_L1:.3f}")
-        print('-' * 40)
-        print(f" * Many: bMSE {shot_dict_balanced['many']['mse']:.3f}\t"
-              f"bMAE {shot_dict_balanced['many']['l1']:.3f}\tG-Mean {shot_dict_balanced['many']['gmean']:.3f}")
-        print(f" * Median: bMSE {shot_dict_balanced['median']['mse']:.3f}\t"
-              f"bMAE {shot_dict_balanced['median']['l1']:.3f}\tG-Mean {shot_dict_balanced['median']['gmean']:.3f}")
-        print(f" * Low: bMSE {shot_dict_balanced['low']['mse']:.3f}\t"
-              f"bMAE {shot_dict_balanced['low']['l1']:.3f}\tG-Mean {shot_dict_balanced['low']['gmean']:.3f}")
+        
+        # Print metrics for each threshold range if applicable
+        if 'below_lower' in metrics_dict:
+            print(f" * Below {args.lower_threshold}: MSE {metrics_dict['below_lower']['mse']:.3f}\t"
+                  f"L1 {metrics_dict['below_lower']['l1']:.3f}\t"
+                  f"G-Mean {metrics_dict['below_lower']['gmean']:.3f}\t"
+                  f"Count {metrics_dict['below_lower']['count']}")
+        
+        if 'middle' in metrics_dict:
+            print(f" * Between {args.lower_threshold} and {args.upper_threshold}: MSE {metrics_dict['middle']['mse']:.3f}\t"
+                  f"L1 {metrics_dict['middle']['l1']:.3f}\t"
+                  f"G-Mean {metrics_dict['middle']['gmean']:.3f}\t"
+                  f"Count {metrics_dict['middle']['count']}")
+        
+        if 'above_upper' in metrics_dict:
+            print(f" * Above {args.upper_threshold}: MSE {metrics_dict['above_upper']['mse']:.3f}\t"
+                  f"L1 {metrics_dict['above_upper']['l1']:.3f}\t"
+                  f"G-Mean {metrics_dict['above_upper']['gmean']:.3f}\t"
+                  f"Count {metrics_dict['above_upper']['count']}")
               
-    return losses_mse.avg, losses_l1.avg, loss_gmean, mean_MSE, mean_L1
+    return losses_mse.avg, losses_l1.avg, loss_gmean
 
-
-def balanced_metrics(preds: Union[np.ndarray, torch.Tensor], 
-                    labels: Union[np.ndarray, torch.Tensor]) -> Tuple[float, float]:
+def threshold_metrics(
+        preds: Union[np.ndarray, torch.Tensor],
+        labels: Union[np.ndarray, torch.Tensor],
+        lower_threshold: Optional[float] = None,
+        upper_threshold: Optional[float] = None
+    ) -> Dict[str, Dict[str, float]]:
     """
-    Calculate balanced MSE and L1 metrics by averaging per-class errors.
+    Calculate metrics for different value ranges based on thresholds.
     
     Args:
         preds: Model predictions
         labels: Ground truth labels
+        lower_threshold: Lower threshold for label values
+        upper_threshold: Upper threshold for label values
         
     Returns:
-        Tuple containing:
-            - mean_mse: Mean of per-class MSE values
-            - mean_l1: Mean of per-class L1/MAE values
+        Dictionary with metrics for each range (below_lower, middle, above_upper)
     """
     # Convert tensors to numpy arrays if needed
     if isinstance(preds, torch.Tensor):
@@ -713,194 +722,76 @@ def balanced_metrics(preds: Union[np.ndarray, torch.Tensor],
     else:
         raise TypeError(f'Type ({type(preds)}) of predictions not supported')
 
-    # Calculate per-class metrics
-    mse_per_class, l1_per_class = [], []
-    for l in np.unique(labels):
-        # Calculate MSE and L1 for each unique label/class
-        mse_per_class.append(np.mean((preds[labels == l] - labels[labels == l]) ** 2))
-        l1_per_class.append(np.mean(np.abs(preds[labels == l] - labels[labels == l])))
-
-    # Average the per-class metrics
-    mean_mse = sum(mse_per_class) / len(mse_per_class)
-    mean_l1 = sum(l1_per_class) / len(l1_per_class)
-    return mean_mse, mean_l1
-
-
-def shot_metrics_balanced(
-        preds: Union[np.ndarray, torch.Tensor], 
-                         labels: Union[np.ndarray, torch.Tensor], 
-                         train_labels: List, 
-                         many_shot_thr: int = 100, 
-                         low_shot_thr: int = 20) -> Dict[str, Dict[str, float]]:
-    """
-    Calculate balanced metrics for different data frequency groups (many/median/low-shot).
+    # Initialize result dictionary
+    metrics_dict = defaultdict(dict)
     
-    Args:
-        preds: Model predictions
-        labels: Ground truth labels
-        train_labels: Labels from training set to determine frequency groups
-        many_shot_thr: Threshold for many-shot classes (>= this value)
-        low_shot_thr: Threshold for low-shot classes (< this value)
+    # Calculate overall metrics
+    overall_mse = np.mean((preds - labels) ** 2)
+    overall_l1 = np.mean(np.abs(preds - labels))
+    overall_l1_all = np.abs(preds - labels)
+    overall_gmean = gmean(overall_l1_all, axis=None).astype(float)
+    
+    metrics_dict['overall'] = {
+        'mse': overall_mse,
+        'l1': overall_l1,
+        'gmean': overall_gmean,
+        'count': len(labels)
+    }
+    
+    # If thresholds are provided, calculate metrics for each range
+    if lower_threshold is not None or upper_threshold is not None:
+        # Below lower threshold
+        if lower_threshold is not None:
+            below_mask = labels < lower_threshold
+            if np.any(below_mask):
+                below_mse = np.mean((preds[below_mask] - labels[below_mask]) ** 2)
+                below_l1 = np.mean(np.abs(preds[below_mask] - labels[below_mask]))
+                below_l1_all = np.abs(preds[below_mask] - labels[below_mask])
+                below_gmean = gmean(below_l1_all, axis=None).astype(float) if len(below_l1_all) > 0 else 0
+                
+                metrics_dict['below_lower'] = {
+                    'mse': below_mse,
+                    'l1': below_l1,
+                    'gmean': below_gmean,
+                    'count': np.sum(below_mask)
+                }
         
-    Returns:
-        Dictionary with metrics for each shot group (many/median/low)
-    """
-    train_labels = np.array(train_labels).astype(int)
-
-    # Convert tensors to numpy arrays if needed
-    if isinstance(preds, torch.Tensor):
-        preds = preds.detach().cpu().numpy()
-        labels = labels.detach().cpu().numpy()
-    elif isinstance(preds, np.ndarray):
-        pass
-    else:
-        raise TypeError(f'Type ({type(preds)}) of predictions not supported')
-
-    # Initialize lists to store metrics
-    train_class_count, test_class_count = [], []
-    mse_per_class, l1_per_class, l1_all_per_class = [], [], []
-    
-    # Calculate per-class metrics
-    for l in np.unique(labels):
-        train_class_count.append(len(train_labels[train_labels == l]))
-        test_class_count.append(len(labels[labels == l]))
-        mse_per_class.append(np.mean((preds[labels == l] - labels[labels == l]) ** 2))
-        l1_per_class.append(np.mean(np.abs(preds[labels == l] - labels[labels == l])))
-        l1_all_per_class.append(np.abs(preds[labels == l] - labels[labels == l]))
-
-    # Separate metrics by shot category (many/median/low)
-    many_shot_mse, median_shot_mse, low_shot_mse = [], [], []
-    many_shot_l1, median_shot_l1, low_shot_l1 = [], [], []
-    many_shot_gmean, median_shot_gmean, low_shot_gmean = [], [], []
-    many_shot_cnt, median_shot_cnt, low_shot_cnt = [], [], []
-
-    # Categorize each class based on its frequency in training set
-    for i in range(len(train_class_count)):
-        if train_class_count[i] > many_shot_thr:
-            # Many-shot class (frequent)
-            many_shot_mse.append(mse_per_class[i])
-            many_shot_l1.append(l1_per_class[i])
-            many_shot_gmean += list(l1_all_per_class[i])
-            many_shot_cnt.append(test_class_count[i])
-
-
-        elif train_class_count[i] < low_shot_thr:
-            # Low-shot class (rare)
-            low_shot_mse.append(mse_per_class[i])
-            low_shot_l1.append(l1_per_class[i])
-            low_shot_gmean += list(l1_all_per_class[i])
-            low_shot_cnt.append(test_class_count[i])
-        else:
-            # Median-shot class (medium frequency)
-            median_shot_mse.append(mse_per_class[i])
-            median_shot_l1.append(l1_per_class[i])
-            median_shot_gmean += list(l1_all_per_class[i])
-            median_shot_cnt.append(test_class_count[i])
-
-    # Compile results into a dictionary
-    shot_dict = defaultdict(dict)
-    
-    # Calculate balanced metrics (simple average of per-class metrics)
-    shot_dict['many']['mse'] = np.sum(many_shot_mse) / len(many_shot_mse)
-    shot_dict['many']['l1'] = np.sum(many_shot_l1) / len(many_shot_l1)
-    shot_dict['many']['gmean'] = gmean(np.hstack(many_shot_gmean), axis=None).astype(float)
-    
-    shot_dict['median']['mse'] = np.sum(median_shot_mse) / len(median_shot_mse)
-    shot_dict['median']['l1'] = np.sum(median_shot_l1) / len(median_shot_l1)
-    shot_dict['median']['gmean'] = gmean(np.hstack(median_shot_gmean), axis=None).astype(float)
-    
-    shot_dict['low']['mse'] = np.sum(low_shot_mse) / len(low_shot_mse)
-    shot_dict['low']['l1'] = np.sum(low_shot_l1) / len(low_shot_l1)
-    shot_dict['low']['gmean'] = gmean(np.hstack(low_shot_gmean), axis=None).astype(float)
-
-    return shot_dict
-
-
-def shot_metrics(preds: Union[np.ndarray, torch.Tensor], 
-                labels: Union[np.ndarray, torch.Tensor], 
-                train_labels: List, 
-                many_shot_thr: int = 100, 
-                low_shot_thr: int = 20) -> Dict[str, Dict[str, float]]:
-    """
-    Calculate standard (weighted) metrics for different data frequency groups (many/median/low-shot).
-    
-    Args:
-        preds: Model predictions
-        labels: Ground truth labels
-        train_labels: Labels from training set to determine frequency groups
-        many_shot_thr: Threshold for many-shot classes (>= this value)
-        low_shot_thr: Threshold for low-shot classes (< this value)
+        # Above upper threshold
+        if upper_threshold is not None:
+            above_mask = labels > upper_threshold
+            if np.any(above_mask):
+                above_mse = np.mean((preds[above_mask] - labels[above_mask]) ** 2)
+                above_l1 = np.mean(np.abs(preds[above_mask] - labels[above_mask]))
+                above_l1_all = np.abs(preds[above_mask] - labels[above_mask])
+                above_gmean = gmean(above_l1_all, axis=None).astype(float) if len(above_l1_all) > 0 else 0
+                
+                metrics_dict['above_upper'] = {
+                    'mse': above_mse,
+                    'l1': above_l1,
+                    'gmean': above_gmean,
+                    'count': np.sum(above_mask)
+                }
         
-    Returns:
-        Dictionary with metrics for each shot group (many/median/low)
-    """
-    train_labels = np.array(train_labels).astype(int)
-
-    # Convert tensors to numpy arrays if needed
-    if isinstance(preds, torch.Tensor):
-        preds = preds.detach().cpu().numpy()
-        labels = labels.detach().cpu().numpy()
-    elif isinstance(preds, np.ndarray):
-        pass
-    else:
-        raise TypeError(f'Type ({type(preds)}) of predictions not supported')
-
-    # Initialize lists to store metrics
-    train_class_count, test_class_count = [], []
-    mse_per_class, l1_per_class, l1_all_per_class = [], [], []
+        # Between thresholds
+        if lower_threshold is not None and upper_threshold is not None:
+            middle_mask = (labels >= lower_threshold) & (labels <= upper_threshold)
+            if np.any(middle_mask):
+                middle_mse = np.mean((preds[middle_mask] - labels[middle_mask]) ** 2)
+                middle_l1 = np.mean(np.abs(preds[middle_mask] - labels[middle_mask]))
+                middle_l1_all = np.abs(preds[middle_mask] - labels[middle_mask])
+                middle_gmean = gmean(middle_l1_all, axis=None).astype(float) if len(middle_l1_all) > 0 else 0
+                
+                metrics_dict['middle'] = {
+                    'mse': middle_mse,
+                    'l1': middle_l1,
+                    'gmean': middle_gmean,
+                    'count': np.sum(middle_mask)
+                }
     
-    # Calculate per-class metrics (sum of errors, not mean)
-    for l in np.unique(labels):
-        train_class_count.append(len(train_labels[train_labels == l]))
-        test_class_count.append(len(labels[labels == l]))
-        mse_per_class.append(np.sum((preds[labels == l] - labels[labels == l]) ** 2))
-        l1_per_class.append(np.sum(np.abs(preds[labels == l] - labels[labels == l])))
-        l1_all_per_class.append(np.abs(preds[labels == l] - labels[labels == l]))
+    return metrics_dict
 
-    # Separate metrics by shot category (many/median/low)
-    many_shot_mse, median_shot_mse, low_shot_mse = [], [], []
-    many_shot_l1, median_shot_l1, low_shot_l1 = [], [], []
-    many_shot_gmean, median_shot_gmean, low_shot_gmean = [], [], []
-    many_shot_cnt, median_shot_cnt, low_shot_cnt = [], [], []
 
-    # Categorize each class based on its frequency in training set
-    for i in range(len(train_class_count)):
-        if train_class_count[i] > many_shot_thr:
-            # Many-shot class (frequent)
-            many_shot_mse.append(mse_per_class[i])
-            many_shot_l1.append(l1_per_class[i])
-            many_shot_gmean += list(l1_all_per_class[i])
-            many_shot_cnt.append(test_class_count[i])
-        elif train_class_count[i] < low_shot_thr:
-            # Low-shot class (rare)
-            low_shot_mse.append(mse_per_class[i])
-            low_shot_l1.append(l1_per_class[i])
-            low_shot_gmean += list(l1_all_per_class[i])
-            low_shot_cnt.append(test_class_count[i])
-        else:
-            # Median-shot class (medium frequency)
-            median_shot_mse.append(mse_per_class[i])
-            median_shot_l1.append(l1_per_class[i])
-            median_shot_gmean += list(l1_all_per_class[i])
-            median_shot_cnt.append(test_class_count[i])
 
-    # Compile results into a dictionary
-    shot_dict = defaultdict(dict)
-    
-    # Calculate weighted metrics (weighted by sample count)
-    shot_dict['many']['mse'] = np.sum(many_shot_mse) / np.sum(many_shot_cnt)
-    shot_dict['many']['l1'] = np.sum(many_shot_l1) / np.sum(many_shot_cnt)
-    shot_dict['many']['gmean'] = gmean(np.hstack(many_shot_gmean), axis=None).astype(float)
-    
-    shot_dict['median']['mse'] = np.sum(median_shot_mse) / np.sum(median_shot_cnt)
-    shot_dict['median']['l1'] = np.sum(median_shot_l1) / np.sum(median_shot_cnt)
-    shot_dict['median']['gmean'] = gmean(np.hstack(median_shot_gmean), axis=None).astype(float)
-    
-    shot_dict['low']['mse'] = np.sum(low_shot_mse) / np.sum(low_shot_cnt)
-    shot_dict['low']['l1'] = np.sum(low_shot_l1) / np.sum(low_shot_cnt)
-    shot_dict['low']['gmean'] = gmean(np.hstack(low_shot_gmean), axis=None).astype(float)
-
-    return shot_dict
 
 
 if __name__ == '__main__':
