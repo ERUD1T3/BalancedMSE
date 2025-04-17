@@ -10,7 +10,7 @@ from typing import Dict, Any, List, Tuple
 import numpy as np
 
 # Import TabDS and data loading functions from your module
-from tab_datasets import (TabDS, 
+from neurips2025.tab_ds import (TabDS, 
                           build_ed_ds,
                           build_sep_ds, 
                           build_sarcos_ds, 
