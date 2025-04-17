@@ -168,7 +168,6 @@ def main() -> None:
     if args.gpu is not None:
         if torch.cuda.is_available():
             print(f"Use GPU: {args.gpu} for training")
-            # torch.cuda.set_device(args.gpu) # TODO: revisit to see if AI got it wrong
         else:
             print("CUDA not available, using CPU.")
             args.gpu = None
@@ -205,16 +204,14 @@ def main() -> None:
     val_dataset = TabDS(X=X_val, y=y_val, reweight='none', lds=False)
     test_dataset = TabDS(X=X_test, y=y_test, reweight='none', lds=False)
 
-    # Pass y_train to shot metrics later (needs to be numpy or list)
-    train_labels_raw = y_train.tolist()
-
     # Create data loaders
+    pin_memory = True if args.gpu is not None else False
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
-                              num_workers=args.workers, pin_memory=True if args.gpu is not None else False, drop_last=False)
+                              num_workers=args.workers, pin_memory=pin_memory, drop_last=False)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False,
-                            num_workers=args.workers, pin_memory=True if args.gpu is not None else False, drop_last=False)
+                            num_workers=args.workers, pin_memory=pin_memory, drop_last=False)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False,
-                             num_workers=args.workers, pin_memory=True if args.gpu is not None else False, drop_last=False)
+                             num_workers=args.workers, pin_memory=pin_memory, drop_last=False)
     print(f"Training data size: {len(train_dataset)}")
     print(f"Validation data size: {len(val_dataset)}")
     print(f"Test data size: {len(test_dataset)}")
@@ -240,12 +237,8 @@ def main() -> None:
         momentum=args.fds_mmt
     )
 
-    if args.gpu is not None:
-        # model = model.cuda()
-        model = torch.nn.DataParallel(model).cuda()
 
-    else:
-        model = model.cpu()
+    model = torch.nn.DataParallel(model).cuda() if args.gpu is not None else model.cpu()
 
     # Evaluation mode - load model and evaluate
     if args.evaluate:
@@ -258,7 +251,7 @@ def main() -> None:
             return
 
         print(f"Loading checkpoint for evaluation: {ckpt_path}")
-        checkpoint = torch.load(ckpt_path, map_location='cuda' if args.gpu is not None else 'cpu')
+        checkpoint = torch.load(ckpt_path)
 
         state_dict = checkpoint['state_dict']
 
@@ -280,7 +273,7 @@ def main() -> None:
     # Set up optimizer
     if not args.retrain_regressor:
         # Optimize all parameters
-        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr) if args.optimizer == 'adam' else \
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay) if args.optimizer == 'adam' else \
             torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     else:
         # Optimize only the last linear layer parameters
@@ -289,7 +282,7 @@ def main() -> None:
                             [k if v.requires_grad else None for k, v in model.module.named_parameters()]))
         assert 1 <= len(parameters) <= 2  # fc.weight, fc.bias
         print(f'===> Only optimize parameters: {names}')
-        optimizer = torch.optim.Adam(parameters, lr=args.lr) if args.optimizer == 'adam' else \
+        optimizer = torch.optim.Adam(parameters, lr=args.lr, weight_decay=args.weight_decay) if args.optimizer == 'adam' else \
             torch.optim.SGD(parameters, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
 
     # Load pretrained weights if specified
@@ -306,34 +299,18 @@ def main() -> None:
         print(f'===> Pre-trained model loaded: {args.pretrained}')
 
     # Resume from checkpoint if specified
-    if args.resume and not args.retrain_regressor:
-        ckpt_path = args.resume
-        if os.path.isdir(ckpt_path):
-            ckpt_path = os.path.join(ckpt_path, 'ckpt.latest.pth.tar')
-
-        if os.path.isfile(ckpt_path):
-            print(f"===> Loading checkpoint '{ckpt_path}'")
-            map_location = f'cuda:{args.gpu}' if args.gpu is not None else 'cpu'
-            checkpoint = torch.load(ckpt_path, map_location=map_location)
+    if args.resume:
+        if os.path.isfile(args.resume):
+            print(f"===> Loading checkpoint '{args.resume}'")
+            checkpoint = torch.load(args.resume) if args.gpu is None else \
+                torch.load(args.resume, map_location=torch.device(f'cuda:{str(args.gpu)}'))
             args.start_epoch = checkpoint['epoch']
-            try:
-                args.best_loss = checkpoint['best_loss']
-            except KeyError:
-                print("Warning: 'best_loss' not found in checkpoint. Initializing to 1e5.")
-                args.best_loss = 1e5
-
-            state_dict = checkpoint['state_dict']
-
-            model.load_state_dict(state_dict, strict=False)
-
-            try:
-                optimizer.load_state_dict(checkpoint['optimizer'])
-            except Exception as e:
-                print(f"Warning: Could not load optimizer state: {e}. Optimizer will start from scratch.")
-
-            print(f"===> Loaded checkpoint '{ckpt_path}' (Epoch [{checkpoint['epoch']}])")
+            args.best_loss = checkpoint['best_loss']
+            model.load_state_dict(checkpoint['state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer'])
+            print(f"===> Loaded checkpoint '{args.resume}' (Epoch [{checkpoint['epoch']}])")
         else:
-            print(f"===> No checkpoint found at '{ckpt_path}', starting from scratch.")
+            print(f"===> No checkpoint found at '{args.resume}'")
 
     # Enable CUDA optimization
     cudnn.benchmark = True
@@ -341,23 +318,7 @@ def main() -> None:
     # Set up loss function
     if args.bmse:
         if args.imp == 'gai':
-            if args.gmm_file is None:
-                gmm_filename = f"{args.dataset}_gmm_K{args.gmm_K}.pkl"
-                gmm_path = os.path.join(args.store_root, gmm_filename)
-                if not os.path.exists(gmm_path):
-                    gmm_path_alt = os.path.join(args.data_dir, args.dataset, gmm_filename)
-                    if os.path.exists(gmm_path_alt):
-                        gmm_path = gmm_path_alt
-                    else:
-                        script_dir = os.path.dirname(os.path.abspath(__file__))
-                        gmm_path_alt2 = os.path.join(script_dir, gmm_filename)
-                        if os.path.exists(gmm_path_alt2):
-                            gmm_path = gmm_path_alt2
-                        else:
-                            raise FileNotFoundError(f"GMM file not found at expected paths: {gmm_path}, {gmm_path_alt}, {gmm_path_alt2}. Please specify --gmm_file or place it correctly.")
-            else:
-                gmm_path = args.gmm_file
-
+            gmm_path = args.gmm_file
             if not os.path.exists(gmm_path):
                 raise FileNotFoundError(f"Specified GMM file not found: {gmm_path}")
 
@@ -387,10 +348,6 @@ def main() -> None:
         # Use standard weighted loss functions
         criterion = globals()[f"weighted_{args.loss}_loss"]
 
-    # Move criterion to GPU if applicable
-    if args.gpu is not None and hasattr(criterion, 'cuda'):
-        criterion = criterion.cuda()
-
     # Training loop
     for epoch in range(args.start_epoch, args.epoch):
         # Adjust learning rate according to schedule
@@ -400,8 +357,7 @@ def main() -> None:
         train_loss = train(train_loader, model, optimizer, epoch, criterion)
         
         # Evaluate on validation set
-        (val_loss_mse, val_loss_l1, val_loss_gmean) = validate(
-            val_loader, model, prefix='Val')
+        val_loss_mse, val_loss_l1, val_loss_gmean = validate(val_loader, model, prefix='Val')
 
         # Determine which metric to use for model selection
         loss_metric = val_loss_mse if args.loss == 'mse' else val_loss_l1
@@ -444,7 +400,7 @@ def main() -> None:
         print(f"Error: Best checkpoint not found at {best_ckpt_path}")
         return
 
-    checkpoint = torch.load(best_ckpt_path, map_location='cuda' if args.gpu is not None else 'cpu')
+    checkpoint = torch.load(best_ckpt_path)
     print(f"Loaded best model from epoch {checkpoint['epoch']}, best val loss {checkpoint['best_loss']:.4f}")
 
     state_dict = checkpoint['state_dict']
@@ -452,8 +408,7 @@ def main() -> None:
     model.load_state_dict(state_dict, strict=True)
 
     # Evaluate on test set
-    test_loss_mse, test_loss_l1, test_loss_gmean = validate(
-        test_loader, model, prefix='Test')
+    test_loss_mse, test_loss_l1, test_loss_gmean = validate(test_loader, model, prefix='Test')
     
     print(f"Test Results: MSE [{test_loss_mse:.4f}], L1 [{test_loss_l1:.4f}], G-Mean [{test_loss_gmean:.4f}]\nDone")
 
