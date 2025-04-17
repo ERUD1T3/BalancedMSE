@@ -13,7 +13,7 @@ from utils import get_lds_kernel_window
 print = logging.info
 
 
-DEFAULT_NUM_BINS = 200 # Default number of bins for histogram if not provided
+DEFAULT_NUM_BINS = 100 # Default number of bins for histogram if not provided
 
 class TabDS(data.Dataset):
     """
@@ -422,70 +422,13 @@ def min_max_norm(data: Union[pd.DataFrame, pd.Series]) -> Union[pd.DataFrame, pd
     else:
         raise TypeError("Input must be a pandas DataFrame or Series")
 
-def build_ed_ds(
-        directory_path: str,
-        shuffle_data: bool = False,
-        apply_log: bool = True,
-        inputs_to_use: Optional[List[str]] = None,
-        outputs_to_use: Optional[List[str]] = None,
-        cme_speed_threshold: float = 0,
-        seed: int = 42
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Builds a dataset by processing files in a given directory.
-
-    Reads SEP event files from the specified directory, processes them to extract
-    input and target cme_files, normalizes the values between 0 and 1 for the columns
-    of interest, excludes rows where proton intensity is -9999, and optionally shuffles the cme_files.
-
-     Parameters:
-        - directory_path (str): Path to the directory containing the sep_event_X files.
-        - shuffle_data (bool): If True, shuffle the cme_files before returning.
-        - apply_log (bool): Whether to apply a logarithmic transformation before normalization.
-        - inputs_to_use (List[str]): List of input types to include in the dataset. Default is ['e0.5', 'e1.8', 'p'].
-        - outputs_to_use (List[str]): List of output types to include in the dataset. Default is both ['p'] and ['delta_p'].
-        - cme_speed_threshold (float): The threshold for CME speed. CMEs with speeds below (<) this threshold will be excluded. -1
-        - seed (int): the random seed
-
-    Returns:
-    - Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]: A tuple containing the combined input data (X), target data (y), log proton intensity (logI), and previous log proton intensity (logI_prev).
-    """
-    all_inputs, all_targets, all_logI, all_logI_prev = [], [], [], []
-
-    for file_name in os.listdir(directory_path):
-        if file_name.endswith('_ie_trim.csv'):
-            file_path = os.path.join(directory_path, file_name)
-            X, y, logI, logI_prev = load_file_data(
-                file_path,
-                apply_log,
-                inputs_to_use,
-                outputs_to_use,
-                cme_speed_threshold)
-            all_inputs.append(X)
-            all_targets.append(y)
-            all_logI.append(logI)
-            all_logI_prev.append(logI_prev)
-
-    X_combined = np.vstack(all_inputs)
-    y_combined = np.concatenate(all_targets)
-    logI_combined = np.concatenate(all_logI)
-    logI_prev_combined = np.concatenate(all_logI_prev)
-
-    if shuffle_data:
-        X_combined, y_combined, logI_combined, logI_prev_combined = shuffle(
-            X_combined, y_combined, logI_combined, logI_prev_combined,
-            random_state=seed
-        )
-
-    return X_combined, y_combined, logI_combined, logI_prev_combined
-
 
 def load_file_data(
         file_path: str,
         apply_log: bool = True,
         inputs_to_use: Optional[List[str]] = None,
         outputs_to_use: Optional[List[str]] = None,
-        cme_speed_threshold: float = -1
+        cme_speed_threshold: float = 0
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Processes data from a single file.
@@ -565,6 +508,65 @@ def load_file_data(
 
     # Return processed X, y, logI and logI_prev
     return X, y, logI, logI_prev
+
+
+
+def build_ed_ds(
+        directory_path: str,
+        shuffle_data: bool = False,
+        apply_log: bool = True,
+        inputs_to_use: Optional[List[str]] = None,
+        outputs_to_use: Optional[List[str]] = None,
+        cme_speed_threshold: float = 0,
+        seed: int = 42
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Builds a dataset by processing files in a given directory.
+
+    Reads SEP event files from the specified directory, processes them to extract
+    input and target cme_files, normalizes the values between 0 and 1 for the columns
+    of interest, excludes rows where proton intensity is -9999, and optionally shuffles the cme_files.
+
+     Parameters:
+        - directory_path (str): Path to the directory containing the sep_event_X files.
+        - shuffle_data (bool): If True, shuffle the cme_files before returning.
+        - apply_log (bool): Whether to apply a logarithmic transformation before normalization.
+        - inputs_to_use (List[str]): List of input types to include in the dataset. Default is ['e0.5', 'e1.8', 'p'].
+        - outputs_to_use (List[str]): List of output types to include in the dataset. Default is both ['p'] and ['delta_p'].
+        - cme_speed_threshold (float): The threshold for CME speed. CMEs with speeds below (<) this threshold will be excluded. -1
+        - seed (int): the random seed
+
+    Returns:
+    - Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]: A tuple containing the combined input data (X), target data (y), log proton intensity (logI), and previous log proton intensity (logI_prev).
+    """
+    all_inputs, all_targets, all_logI, all_logI_prev = [], [], [], []
+
+    for file_name in os.listdir(directory_path):
+        if file_name.endswith('_ie_trim.csv'):
+            file_path = os.path.join(directory_path, file_name)
+            X, y, logI, logI_prev = load_file_data(
+                file_path,
+                apply_log,
+                inputs_to_use,
+                outputs_to_use,
+                cme_speed_threshold)
+            all_inputs.append(X)
+            all_targets.append(y)
+            all_logI.append(logI)
+            all_logI_prev.append(logI_prev)
+
+    X_combined = np.vstack(all_inputs)
+    y_combined = np.concatenate(all_targets)
+    logI_combined = np.concatenate(all_logI)
+    logI_prev_combined = np.concatenate(all_logI_prev)
+
+    if shuffle_data:
+        X_combined, y_combined, logI_combined, logI_prev_combined = shuffle(
+            X_combined, y_combined, logI_combined, logI_prev_combined,
+            random_state=seed
+        )
+
+    return X_combined, y_combined, logI_combined, logI_prev_combined
 
 
 
@@ -825,3 +827,121 @@ def build_asc_ds(file_path: str, shuffle_data: bool = False, random_state: int =
     print(f"X shape: {X.shape}, y shape: {y.shape}")
     
     return X, y
+
+
+def load_tabular_splits(
+    dataset_name: str,
+    data_dir: str,
+    train_split_name: str,
+    val_split_name: str,
+    test_split_name: str,
+    seed: int
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Loads train, validation, and test splits (X, y) for a specified tabular dataset.
+
+    Handles different loading logic for specific datasets like 'ed' (directory-based)
+    versus others (file-based).
+
+    Args:
+        dataset_name (str): Name of the dataset (e.g., 'sep', 'ed', 'sarcos').
+        data_dir (str): Root directory containing dataset subfolders.
+        train_split_name (str): Identifier for the training split (e.g., 'training').
+        val_split_name (str): Identifier for the validation split (e.g., 'validation').
+        test_split_name (str): Identifier for the test split (e.g., 'test').
+        seed (int): Random seed for shuffling (primarily affects training split).
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+            A tuple containing (X_train, y_train, X_val, y_val, X_test, y_test).
+
+    Raises:
+        ValueError: If the dataset name is not configured or file patterns are missing.
+        FileNotFoundError: If the expected data file or directory is not found.
+    """
+    # --- Dataset Configuration ---
+    build_func_map = {
+        'sep': build_sep_ds, 'sarcos': build_sarcos_ds, 'onp': build_onp_ds,
+        'bf': build_bf_ds, 'asc': build_asc_ds, 'ed': build_ed_ds
+    }
+    dataset_folder_map = { # Maps dataset name to subfolder within data_dir
+        'sep': 'sep', 'sarcos': 'sarcos', 'onp': 'onp',
+        'bf': 'bf', 'asc': 'asc', 'ed': 'ed'
+    }
+    # Defines expected filename patterns for non-'ed' datasets
+    file_patterns = {
+        'sep': f"{dataset_name}_{{split_name}}.csv", # Uses f-string placeholder
+        'sarcos': f"{dataset_name}_{{split_name}}.csv",
+        'onp': f"{dataset_name}_{{split_name}}.csv",
+        'bf': f"{dataset_name}_{{split_name}}.csv",
+        'asc': f"{dataset_name}_{{split_name}}.csv"
+    }
+
+    # --- Input Validation ---
+    if dataset_name not in build_func_map:
+        raise ValueError(f"Dataset '{dataset_name}' loading function is not configured in build_func_map.")
+    if dataset_name not in dataset_folder_map:
+        raise ValueError(f"Dataset '{dataset_name}' folder is not configured in dataset_folder_map.")
+    if dataset_name != 'ed' and dataset_name not in file_patterns:
+        raise ValueError(f"Dataset '{dataset_name}' file pattern is not configured in file_patterns.")
+
+    dataset_folder = dataset_folder_map[dataset_name]
+    build_func = build_func_map[dataset_name]
+
+    splits_to_load = {'train': train_split_name, 'val': val_split_name, 'test': test_split_name}
+    loaded_data = {} # Dictionary to store loaded X and y for each split
+
+    # --- Load Each Split ---
+    for split_key, split_name in splits_to_load.items():
+        # Determine if shuffling should be applied (typically only for training)
+        # Note: Shuffling happens *during* loading via the build_*_ds functions
+        should_shuffle_split = (split_key == 'train')
+
+        print(f"Loading '{dataset_name}' - '{split_key}' ({split_name})...")
+
+        if dataset_name == 'ed':
+            # Special handling for 'ed' dataset which expects a directory path
+            # Assumes structure: data_dir / dataset_folder / split_name /
+            data_path = os.path.join(data_dir, dataset_folder, split_name)
+            if not os.path.isdir(data_path):
+                raise FileNotFoundError(f"Data directory not found for '{dataset_name}' - '{split_key}' at: {data_path}")
+
+            print(f"  Loading from directory: {data_path}")
+            # build_ed_ds returns X, y, logI, logI_prev. We only need X and y here.
+            # Pass relevant arguments including shuffle flag and seed
+            X, y, _, _ = build_func(
+                directory_path=data_path,
+                shuffle_data=should_shuffle_split,
+                seed=seed
+            )
+        else:
+            # Standard handling for datasets expecting a single file path
+            try:
+                # Format the file pattern with the current split name
+                file_name = file_patterns[dataset_name].format(split_name=split_name)
+            except KeyError:
+                 # This should not happen due to earlier checks, but as a safeguard:
+                 raise ValueError(f"Filename pattern missing key for dataset '{dataset_name}'.")
+
+            data_path = os.path.join(data_dir, dataset_folder, file_name)
+
+            if not os.path.exists(data_path):
+                raise FileNotFoundError(f"Data file not found for '{dataset_name}' - '{split_key}' at: {data_path}")
+
+            print(f"  Loading from file: {data_path}")
+            # Other build_*_ds functions return X, y and expect 'random_state' for seed
+            X, y = build_func(
+                file_path=data_path,
+                shuffle_data=should_shuffle_split,
+                random_state=seed
+            )
+
+        # Store loaded data
+        loaded_data[f'X_{split_key}'] = X
+        loaded_data[f'y_{split_key}'] = y
+        print(f"  Loaded shapes: X={X.shape}, y={y.shape}")
+
+    # Return the splits in the expected order
+    return (loaded_data['X_train'], loaded_data['y_train'],
+            loaded_data['X_val'], loaded_data['y_val'],
+            loaded_data['X_test'], loaded_data['y_test'])

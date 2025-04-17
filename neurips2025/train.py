@@ -6,6 +6,7 @@ import pandas as pd
 from collections import defaultdict
 from scipy.stats import gmean
 from typing import Dict, List, Tuple, Optional, Union, Any
+import joblib
 
 import torch
 import torch.nn as nn
@@ -13,9 +14,9 @@ import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader
 from tensorboard_logger import Logger
 
-from resnet import resnet50
 from loss import *
-from datasets import IMDBWIKI
+from tab_datasets import (TabDS, load_tabular_splits, set_seed)
+from mlp import create_mlp
 from utils import *
 from balanaced_mse import *
 
@@ -41,15 +42,14 @@ parser.add_argument('--fds_ks', type=int, default=5, help='FDS kernel size: shou
 parser.add_argument('--fds_sigma', type=float, default=1, help='FDS gaussian/laplace kernel sigma')
 parser.add_argument('--start_update', type=int, default=0, help='which epoch to start FDS updating')
 parser.add_argument('--start_smooth', type=int, default=1, help='which epoch to start using FDS to smooth features')
-parser.add_argument('--bucket_num', type=int, default=100, help='maximum bucket considered for FDS')
-parser.add_argument('--bucket_start', type=int, default=0, choices=[0, 3],
-                    help='minimum(starting) bucket for FDS, 0 for IMDBWIKI, 3 for AgeDB')
+parser.add_argument('--bucket_num', type=int, default=100, help='maximum bucket number for FDS and BNI Loss (TabDS uses DEFAULT_NUM_BINS=100)')
+parser.add_argument('--bucket_start', type=int, default=0, help='minimum(starting) bucket for FDS')
 parser.add_argument('--fds_mmt', type=float, default=0.9, help='FDS momentum')
 
 # BMSE (Balanced MSE)
 parser.add_argument('--bmse', action='store_true', default=False, help='use Balanced MSE')
 parser.add_argument('--imp', type=str, default='gai', choices=['gai', 'bmc', 'bni'], help='implementation options')
-parser.add_argument('--gmm', type=str, default='gmm.pkl', help='path to preprocessed GMM')
+parser.add_argument('--gmm_file', type=str, default=None, help='Path to preprocessed GMM file (e.g., sep_gmm_K8.pkl). If None, constructed from dataset/K.')
 parser.add_argument('--init_noise_sigma', type=float, default=1., help='initial scale of the noise')
 parser.add_argument('--sigma_lr', type=float, default=1e-2, help='learning rate of the noise scale')
 parser.add_argument('--balanced_metric', action='store_true', default=False, help='use balanced metric')
@@ -59,35 +59,49 @@ parser.add_argument('--fix_noise_sigma', action='store_true', default=False, hel
 parser.add_argument('--reweight', type=str, default='none', choices=['none', 'sqrt_inv', 'inverse'],
                     help='cost-sensitive reweighting scheme')
 # Two-stage training: RRT (Regressor Re-Training)
-parser.add_argument('--retrain_fc', action='store_true', default=False,
-                    help='whether to retrain last regression layer (regressor)')
+parser.add_argument('--retrain_regressor', action='store_true', default=False,
+                    help='whether to retrain last regression layer (regressor) of MLP')
 
 # ----- Training/optimization related arguments -----
-parser.add_argument('--dataset', type=str, default='imdb_wiki', choices=['imdb_wiki', 'agedb'], help='dataset name')
-parser.add_argument('--data_dir', type=str, default='./data', help='data directory')
-parser.add_argument('--model', type=str, default='resnet50', help='model name')
+parser.add_argument('--dataset', type=str, required=True,
+                    choices=['sep', 'sarcos', 'onp', 'bf', 'asc', 'ed'],
+                    help='Name of the tabular dataset to use.')
+parser.add_argument('--data_dir', type=str, default='C:/Users/the_3/Documents/github/BalancedMSE/neurips2025/data', help='Root directory containing dataset subfolders.')
+parser.add_argument('--train_split_name', type=str, default='training', help='Name for the training data file/folder.')
+parser.add_argument('--val_split_name', type=str, default='validation', help='Name for the validation data file/folder.')
+parser.add_argument('--test_split_name', type=str, default='testing', help='Name for the test data file/folder.')
+
+# Added MLP specific args
+parser.add_argument('--model', type=str, default='mlp', choices=['mlp'], help='model name')
+parser.add_argument('--mlp_hiddens', type=int, nargs='+', default=[100, 100, 100], help='MLP hidden layer sizes')
+parser.add_argument('--mlp_embed_dim', type=int, default=128, help='MLP embedding dimension (output of backbone)')
+parser.add_argument('--mlp_skip_layers', type=int, default=1, help='MLP skip connection frequency')
+parser.add_argument('--mlp_skip_repr', action='store_true', default=True, help='MLP merge skip into final representation')
+parser.add_argument('--mlp_dropout', type=float, default=0.1, help='MLP dropout rate')
+
 parser.add_argument('--store_root', type=str, default='checkpoint', help='root path for storing checkpoints, logs')
 parser.add_argument('--store_name', type=str, default='', help='experiment store name')
 parser.add_argument('--gpu', type=int, default=None, help='GPU ID to use')
 parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'sgd'], help='optimizer type')
 parser.add_argument('--loss', type=str, default='l1', choices=['mse', 'l1', 'focal_l1', 'focal_mse', 'huber'],
                     help='training loss type')
-parser.add_argument('--lr', type=float, default=1e-3, help='initial learning rate')
-parser.add_argument('--epoch', type=int, default=90, help='number of epochs to train')
+parser.add_argument('--lr', type=float, default=1e-4, help='initial learning rate')
+parser.add_argument('--epoch', type=int, default=100, help='number of epochs to train')
 parser.add_argument('--momentum', type=float, default=0.9, help='optimizer momentum')
 parser.add_argument('--weight_decay', type=float, default=1e-2, help='optimizer weight decay')
 parser.add_argument('--schedule', type=int, nargs='*', default=[60, 80], help='lr schedule (when to drop lr by 10x)')
 parser.add_argument('--batch_size', type=int, default=256, help='batch size')
-parser.add_argument('--print_freq', type=int, default=10, help='logging frequency')
-parser.add_argument('--img_size', type=int, default=224, help='image size used in training')
-parser.add_argument('--workers', type=int, default=32, help='number of workers used in data loading')
+parser.add_argument('--print_freq', type=int, default=50, help='logging frequency')
+parser.add_argument('--workers', type=int, default=4, help='number of workers used in data loading')
 # Checkpoints
 parser.add_argument('--resume', type=str, default='', help='checkpoint file path to resume training')
-parser.add_argument('--pretrained', type=str, default='', help='checkpoint file path to load backbone weights')
 parser.add_argument('--evaluate', action='store_true', help='evaluate only flag')
+parser.add_argument('--seed', type=int, default=42, help='random seed for reproducibility')
 
-parser.set_defaults(augment=True)
 args, unknown = parser.parse_known_args()
+
+# Set seed for reproducibility
+set_seed(args.seed)
 
 # Initialize training state variables
 args.start_epoch, args.best_loss = 0, 1e5
@@ -106,15 +120,18 @@ if args.fds:
     if args.fds_kernel in ['gaussian', 'laplace']:
         args.store_name += f'_{args.fds_sigma}'
     args.store_name += f'_{args.start_update}_{args.start_smooth}_{args.fds_mmt}'
-if args.retrain_fc:
-    args.store_name += f'_retrain_fc'
+if args.retrain_regressor:
+    args.store_name += f'_retrainReg'
 if args.bmse:
     args.store_name += f'_{args.imp}_{args.init_noise_sigma}_{args.sigma_lr}'
     if args.imp == 'gai':
-        args.store_name += f'_{args.gmm[:-4]}'
+        gmm_suffix = args.gmm_file.split('/')[-1].replace('.pkl','')
+        args.store_name += f'_{gmm_suffix}'
+    if args.fix_noise_sigma:
+        args.store_name += '_fixNoise'
+args.store_name = f"{args.dataset}_{args.model}{args.store_name}_{args.optimizer}_{args.loss}_lr{args.lr}_bs{args.batch_size}_wd{args.weight_decay}_epoch{args.epoch}"
 if args.balanced_metric:
-    args.store_name += f'_balanced_metric'
-args.store_name = f"{args.dataset}_{args.model}{args.store_name}_{args.optimizer}_{args.loss}_{args.lr}_{args.batch_size}"
+    args.store_name += '_balMetric'
 
 # Create folders for storing results
 prepare_folders(args)
@@ -136,6 +153,8 @@ print(f"Store name: {args.store_name}")
 tb_logger = Logger(logdir=os.path.join(args.store_root, args.store_name), flush_secs=2)
 
 
+
+
 def main() -> None:
     """
     Main function to run the training/evaluation pipeline.
@@ -148,60 +167,119 @@ def main() -> None:
     5. Training/evaluating the model
     """
     if args.gpu is not None:
-        print(f"Use GPU: {args.gpu} for training")
+        if torch.cuda.is_available():
+            print(f"Use GPU: {args.gpu} for training")
+            # torch.cuda.set_device(args.gpu) # TODO: revisit to see if AI got it wrong
+        else:
+            print("CUDA not available, using CPU.")
+            args.gpu = None
 
     # Data preparation
     print('=====> Preparing data...')
-    print(f"File (.csv): {args.dataset}.csv")
-    df = pd.read_csv(os.path.join(args.data_dir, f"{args.dataset}.csv"))
-    df_train, df_val, df_test = df[df['split'] == 'train'], df[df['split'] == 'val'], df[df['split'] == 'test']
-    train_labels = df_train['age']
+    start_time = time.time()
+    try:
+        X_train, y_train, X_val, y_val, X_test, y_test = load_tabular_splits(
+            args.dataset, args.data_dir, args.train_split_name,
+            args.val_split_name, args.test_split_name, args.seed
+        )
+        print(f"Data loaded. Train: {X_train.shape}/{y_train.shape}, Val: {X_val.shape}/{y_val.shape}, Test: {X_test.shape}/{y_test.shape}")
+        print(f'Data loading time: {time.time() - start_time:.2f} seconds')
+    except (ValueError, FileNotFoundError) as e:
+        print(f"Error loading data: {e}")
+        return
 
-    # Create datasets with appropriate transformations and sampling strategies
-    train_dataset = IMDBWIKI(data_dir=args.data_dir, df=df_train, img_size=args.img_size, split='train',
-                             reweight=args.reweight, lds=args.lds, lds_kernel=args.lds_kernel, lds_ks=args.lds_ks,
-                             lds_sigma=args.lds_sigma)
-    val_dataset = IMDBWIKI(data_dir=args.data_dir, df=df_val, img_size=args.img_size, split='val')
-    test_dataset = IMDBWIKI(data_dir=args.data_dir, df=df_test, img_size=args.img_size, split='test')
+    # Get input dimension from training data
+    input_dim = X_train.shape[1]
+    print(f"Input feature dimension: {input_dim}")
+
+    # Create TabDS datasets
+    print("Creating TabDS datasets...")
+    train_dataset = TabDS(
+        X=X_train, y=y_train,
+        reweight=args.reweight,
+        lds=args.lds, 
+        lds_kernel=args.lds_kernel, 
+        lds_ks=args.lds_ks, 
+        lds_sigma=args.lds_sigma,
+        bins=args.bucket_num
+    )
+    val_dataset = TabDS(X=X_val, y=y_val, reweight='none', lds=False)
+    test_dataset = TabDS(X=X_test, y=y_test, reweight='none', lds=False)
+
+    # Pass y_train to shot metrics later (needs to be numpy or list)
+    train_labels_raw = y_train.tolist()
 
     # Create data loaders
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
-                              num_workers=args.workers, pin_memory=True, drop_last=False)
+                              num_workers=args.workers, pin_memory=True if args.gpu is not None else False, drop_last=False)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False,
-                            num_workers=args.workers, pin_memory=True, drop_last=False)
+                            num_workers=args.workers, pin_memory=True if args.gpu is not None else False, drop_last=False)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False,
-                             num_workers=args.workers, pin_memory=True, drop_last=False)
+                             num_workers=args.workers, pin_memory=True if args.gpu is not None else False, drop_last=False)
     print(f"Training data size: {len(train_dataset)}")
     print(f"Validation data size: {len(val_dataset)}")
     print(f"Test data size: {len(test_dataset)}")
 
     # Model initialization
     print('=====> Building model...')
-    model = resnet50(fds=args.fds, bucket_num=args.bucket_num, bucket_start=args.bucket_start,
-                     start_update=args.start_update, start_smooth=args.start_smooth,
-                     kernel=args.fds_kernel, ks=args.fds_ks, sigma=args.fds_sigma, momentum=args.fds_mmt)
-    model = torch.nn.DataParallel(model).cuda()
+    model = create_mlp(
+        input_dim=input_dim,
+        output_dim=1,
+        hiddens=args.mlp_hiddens,
+        skipped_layers=args.mlp_skip_layers,
+        embed_dim=args.mlp_embed_dim,
+        skip_repr=args.mlp_skip_repr,
+        dropout=args.mlp_dropout,
+        fds=args.fds,
+        bucket_num=args.bucket_num,
+        bucket_start=args.bucket_start,
+        start_update=args.start_update,
+        start_smooth=args.start_smooth,
+        kernel=args.fds_kernel,
+        ks=args.fds_ks,
+        sigma=args.fds_sigma,
+        momentum=args.fds_mmt
+    )
+
+    if args.gpu is not None:
+        # model = model.cuda()
+        model = torch.nn.DataParallel(model).cuda()
+
+    else:
+        model = model.cpu()
 
     # Evaluation mode - load model and evaluate
     if args.evaluate:
         assert args.resume, 'Specify a trained model using [args.resume]'
-        checkpoint = torch.load(args.resume)
-        model.load_state_dict(checkpoint['state_dict'], strict=False)
-        print(f"===> Checkpoint '{args.resume}' loaded (epoch [{checkpoint['epoch']}]), testing...")
-        validate(test_loader, model, train_labels=train_labels, prefix='Test')
+        ckpt_path = args.resume
+        if os.path.isdir(ckpt_path):
+            ckpt_path = os.path.join(ckpt_path, 'ckpt.best.pth.tar')
+        if not os.path.isfile(ckpt_path):
+            print(f"Error: Checkpoint file not found at {ckpt_path}")
+            return
+
+        print(f"Loading checkpoint for evaluation: {ckpt_path}")
+        checkpoint = torch.load(ckpt_path, map_location='cuda' if args.gpu is not None else 'cpu')
+
+        state_dict = checkpoint['state_dict']
+
+        model.load_state_dict(state_dict, strict=True)
+        print(f"===> Checkpoint '{ckpt_path}' loaded (epoch [{checkpoint['epoch']}]), testing...")
+        validate(test_loader, model, train_labels=train_labels_raw, prefix='Test')
         return
 
     # For retraining only the final layer (transfer learning)
-    if args.retrain_fc:
+    if args.retrain_regressor:
         assert args.reweight != 'none' and args.pretrained or args.bmse
-        print('===> Retrain last regression layer only!')
-        # Freeze all layers except the final regression layer
+        print('===> Retrain last regression layer (output_layer) only!')
         for name, param in model.named_parameters():
-            if 'fc' not in name and 'linear' not in name:
+            if 'output_layer' not in name:
                 param.requires_grad = False
+            else:
+                print(f"Keeping param trainable: {name}")
 
     # Set up optimizer
-    if not args.retrain_fc:
+    if not args.retrain_regressor:
         # Optimize all parameters
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr) if args.optimizer == 'adam' else \
             torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
@@ -229,18 +307,34 @@ def main() -> None:
         print(f'===> Pre-trained model loaded: {args.pretrained}')
 
     # Resume from checkpoint if specified
-    if args.resume:
-        if os.path.isfile(args.resume):
-            print(f"===> Loading checkpoint '{args.resume}'")
-            checkpoint = torch.load(args.resume) if args.gpu is None else \
-                torch.load(args.resume, map_location=torch.device(f'cuda:{str(args.gpu)}'))
+    if args.resume and not args.retrain_regressor:
+        ckpt_path = args.resume
+        if os.path.isdir(ckpt_path):
+            ckpt_path = os.path.join(ckpt_path, 'ckpt.latest.pth.tar')
+
+        if os.path.isfile(ckpt_path):
+            print(f"===> Loading checkpoint '{ckpt_path}'")
+            map_location = f'cuda:{args.gpu}' if args.gpu is not None else 'cpu'
+            checkpoint = torch.load(ckpt_path, map_location=map_location)
             args.start_epoch = checkpoint['epoch']
-            args.best_loss = checkpoint['best_loss']
-            model.load_state_dict(checkpoint['state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer'])
-            print(f"===> Loaded checkpoint '{args.resume}' (Epoch [{checkpoint['epoch']}])")
+            try:
+                args.best_loss = checkpoint['best_loss']
+            except KeyError:
+                print("Warning: 'best_loss' not found in checkpoint. Initializing to 1e5.")
+                args.best_loss = 1e5
+
+            state_dict = checkpoint['state_dict']
+
+            model.load_state_dict(state_dict, strict=False)
+
+            try:
+                optimizer.load_state_dict(checkpoint['optimizer'])
+            except Exception as e:
+                print(f"Warning: Could not load optimizer state: {e}. Optimizer will start from scratch.")
+
+            print(f"===> Loaded checkpoint '{ckpt_path}' (Epoch [{checkpoint['epoch']}])")
         else:
-            print(f"===> No checkpoint found at '{args.resume}'")
+            print(f"===> No checkpoint found at '{ckpt_path}', starting from scratch.")
 
     # Enable CUDA optimization
     cudnn.benchmark = True
@@ -248,23 +342,55 @@ def main() -> None:
     # Set up loss function
     if args.bmse:
         if args.imp == 'gai':
-            criterion = GAILoss(args.init_noise_sigma, args.gmm)
+            if args.gmm_file is None:
+                gmm_filename = f"{args.dataset}_gmm_K{args.gmm_K}.pkl"
+                gmm_path = os.path.join(args.store_root, gmm_filename)
+                if not os.path.exists(gmm_path):
+                    gmm_path_alt = os.path.join(args.data_dir, args.dataset, gmm_filename)
+                    if os.path.exists(gmm_path_alt):
+                        gmm_path = gmm_path_alt
+                    else:
+                        script_dir = os.path.dirname(os.path.abspath(__file__))
+                        gmm_path_alt2 = os.path.join(script_dir, gmm_filename)
+                        if os.path.exists(gmm_path_alt2):
+                            gmm_path = gmm_path_alt2
+                        else:
+                            raise FileNotFoundError(f"GMM file not found at expected paths: {gmm_path}, {gmm_path_alt}, {gmm_path_alt2}. Please specify --gmm_file or place it correctly.")
+            else:
+                gmm_path = args.gmm_file
+
+            if not os.path.exists(gmm_path):
+                raise FileNotFoundError(f"Specified GMM file not found: {gmm_path}")
+
+            print(f"Loading GMM parameters from: {gmm_path}")
+            criterion = GAILoss(args.init_noise_sigma, gmm_path)
         elif args.imp == 'bmc':
             criterion = BMCLoss(args.init_noise_sigma)
         elif args.imp == 'bni':
-            # Get bucket information for BNI loss
+            print("Fetching bucket info for BNI loss...")
             bucket_centers, bucket_weights = train_dataset.get_bucket_info(
-                max_target=200, lds=args.lds, lds_kernel=args.lds_kernel, lds_ks=args.lds_ks, lds_sigma=args.lds_sigma)
+                bins=args.bucket_num,
+                lds=args.lds, lds_kernel=args.lds_kernel,
+                lds_ks=args.lds_ks, lds_sigma=args.lds_sigma)
+            print(f"Obtained {len(bucket_centers)} buckets for BNI.")
             criterion = BNILoss(args.init_noise_sigma, bucket_centers, bucket_weights)
         else:
-            raise NotImplementedError
-        
+            raise NotImplementedError(f"BMSE implementation '{args.imp}' not supported.")
+
         # Add noise sigma parameter to optimizer if not fixed
         if not args.fix_noise_sigma:
-            optimizer.add_param_group({'params': criterion.noise_sigma, 'lr': args.sigma_lr, 'name': 'noise_sigma'})
+            if hasattr(criterion, 'noise_sigma'):
+                optimizer.add_param_group({'params': criterion.noise_sigma, 'lr': args.sigma_lr, 'name': 'noise_sigma'})
+                print(f"Added noise_sigma to optimizer with lr: {args.sigma_lr}")
+            else:
+                print(f"Warning: BMSE criterion {args.imp} does not have 'noise_sigma' attribute. Cannot optimize it.")
     else:
         # Use standard weighted loss functions
         criterion = globals()[f"weighted_{args.loss}_loss"]
+
+    # Move criterion to GPU if applicable
+    if args.gpu is not None and hasattr(criterion, 'cuda'):
+        criterion = criterion.cuda()
 
     # Training loop
     for epoch in range(args.start_epoch, args.epoch):
@@ -275,8 +401,8 @@ def main() -> None:
         train_loss = train(train_loader, model, optimizer, epoch, criterion)
         
         # Evaluate on validation set
-        val_loss_mse, val_loss_l1, val_loss_gmean, mean_MSE, mean_L1 = validate(val_loader, model,
-                                                                                train_labels=train_labels)
+        (val_loss_mse, val_loss_l1, val_loss_gmean, mean_MSE, mean_L1) = validate(
+            val_loader, model, train_labels=train_labels_raw)
 
         # Determine which metric to use for model selection
         loss_metric = val_loss_mse if args.loss == 'mse' else val_loss_l1
@@ -286,38 +412,55 @@ def main() -> None:
         # Check if current model is the best so far
         is_best = loss_metric < args.best_loss
         args.best_loss = min(loss_metric, args.best_loss)
-        print(f"Best {'L1' if 'l1' in args.loss else 'MSE'} Loss: {args.best_loss:.3f}")
+        print(f"Best Validation {'Balanced ' if args.balanced_metric else ''}{'MSE' if 'mse' in args.loss else 'L1'} Loss: {args.best_loss:.4f}")
         
         # Save checkpoint
+        state_dict_to_save = model.state_dict()
         save_checkpoint(args, {
             'epoch': epoch + 1,
             'model': args.model,
             'best_loss': args.best_loss,
-            'state_dict': model.state_dict(),
+            'state_dict': state_dict_to_save,
             'optimizer': optimizer.state_dict(),
-        }, is_best)
+            'args': vars(args)
+        }, is_best, epoch + 1 == args.epoch)
         
         print(f"Epoch #{epoch}: Train loss [{train_loss:.4f}]; "
-              f"Val loss: MSE [{val_loss_mse:.4f}], L1 [{val_loss_l1:.4f}], G-Mean [{val_loss_gmean:.4f}]")
+              f"Val loss: MSE [{val_loss_mse:.4f}], L1 [{val_loss_l1:.4f}], G-Mean [{val_loss_gmean:.4f}], "
+              f"bMSE [{mean_MSE:.4f}], bL1 [{mean_L1:.4f}]")
 
         # Log metrics to TensorBoard
         tb_logger.log_value('train_loss', train_loss, epoch)
-        tb_logger.log_value('val_loss_mse', val_loss_mse, epoch)
-        tb_logger.log_value('val_loss_l1', val_loss_l1, epoch)
-        tb_logger.log_value('val_loss_gmean', val_loss_gmean, epoch)
+        tb_logger.log_value('val/loss_mse', val_loss_mse, epoch)
+        tb_logger.log_value('val/loss_l1', val_loss_l1, epoch)
+        tb_logger.log_value('val/loss_gmean', val_loss_gmean, epoch)
+        tb_logger.log_value('val/balanced_mse', mean_MSE, epoch)
+        tb_logger.log_value('val/balanced_l1', mean_L1, epoch)
+        for i, param_group in enumerate(optimizer.param_groups):
+            tb_logger.log_value(f'lr/group_{i}', param_group['lr'], epoch)
+        if args.bmse and not args.fix_noise_sigma and hasattr(criterion, 'noise_sigma'):
+            tb_logger.log_value('noise_sigma', criterion.noise_sigma.item(), epoch)
 
     # Test with best checkpoint after training
     print("=" * 120)
-    print("Test best model on testset...")
-    checkpoint = torch.load(f"{args.store_root}/{args.store_name}/ckpt.best.pth.tar")
-    model.load_state_dict(checkpoint['state_dict'])
-    print(f"Loaded best model, epoch {checkpoint['epoch']}, best val loss {checkpoint['best_loss']:.4f}")
-    
+    print("Testing best model on testset...")
+    best_ckpt_path = os.path.join(args.store_root, args.store_name, 'ckpt.best.pth.tar')
+    if not os.path.exists(best_ckpt_path):
+        print(f"Error: Best checkpoint not found at {best_ckpt_path}")
+        return
+
+    checkpoint = torch.load(best_ckpt_path, map_location='cuda' if args.gpu is not None else 'cpu')
+    print(f"Loaded best model from epoch {checkpoint['epoch']}, best val loss {checkpoint['best_loss']:.4f}")
+
+    state_dict = checkpoint['state_dict']
+
+    model.load_state_dict(state_dict, strict=True)
+
     # Evaluate on test set
-    test_loss_mse, test_loss_l1, test_loss_gmean, mean_MSE, mean_L1 = validate(test_loader, model,
-                                                                               train_labels=train_labels, prefix='Test')
+    test_loss_mse, test_loss_l1, test_loss_gmean, mean_MSE, mean_L1 = validate(
+        test_loader, model, train_labels=train_labels_raw, prefix='Test')
     print(
-        f"Test loss: bMSE [{mean_MSE:.4f}], bMAE [{mean_L1:.4f}], MSE [{test_loss_mse:.4f}], L1 [{test_loss_l1:.4f}], G-Mean [{test_loss_gmean:.4f}]\nDone")
+        f"Test Results: bMSE [{mean_MSE:.4f}], bMAE [{mean_L1:.4f}], MSE [{test_loss_mse:.4f}], L1 [{test_loss_l1:.4f}], G-Mean [{test_loss_gmean:.4f}]\nDone")
 
 
 def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Optimizer, epoch: int, criterion: nn.Module) -> float:
@@ -338,30 +481,19 @@ def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Opt
     batch_time = AverageMeter('Time', ':6.2f')
     data_time = AverageMeter('Data', ':6.4f')
     
-    # Set up loss meter with appropriate name based on loss type
-    if args.bmse:
-        losses = AverageMeter(f'Loss ({args.imp.upper()})', ':.3f')
-    else:
-        losses = AverageMeter(f'Loss ({args.loss.upper()})', ':.3f')
+    loss_name = f'Loss ({args.imp.upper()})' if args.bmse else f'Loss ({args.loss.upper()})'
+    losses = AverageMeter(loss_name, ':.4f')
     
-    # Initialize progress meter
-    progress = ProgressMeter(
-        len(train_loader),
-        [batch_time, data_time, losses],
-        prefix="Epoch: [{}]".format(epoch)
-    )
+    meters_to_display = [batch_time, data_time, losses]
 
     # Add additional metrics for balanced MSE if enabled
     if args.bmse:
         noise_var = AverageMeter('Noise Var', ':.5f')
         l2 = AverageMeter('L2', ':.5f')
-        progress = ProgressMeter(
-            len(train_loader),
-            [batch_time, data_time, losses, noise_var, l2],
-            prefix="Epoch: [{}]".format(epoch)
-        )
+        meters_to_display.extend([noise_var, l2])
 
-    # Set model to training mode
+    progress = ProgressMeter(len(train_loader), meters_to_display, prefix="Epoch: [{}]".format(epoch))
+
     model.train()
     end = time.time()
     
@@ -370,23 +502,28 @@ def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Opt
         # Measure data loading time
         data_time.update(time.time() - end)
         
-        # Move data to GPU
-        inputs, targets, weights = \
-            inputs.cuda(non_blocking=True), targets.cuda(non_blocking=True), weights.cuda(non_blocking=True)
-        
-        # Forward pass - handle FDS (Feature Distribution Smoothing) if enabled
+        if args.gpu is not None:
+            inputs, targets, weights = \
+                inputs.cuda(args.gpu, non_blocking=True), \
+                targets.cuda(args.gpu, non_blocking=True), \
+                weights.cuda(args.gpu, non_blocking=True)
+        else:
+            inputs, targets, weights = inputs.cpu(), targets.cpu(), weights.cpu()
+
         if args.fds:
-            outputs, _ = model(inputs, targets, epoch)
+            predictions, _ = model(inputs, targets, epoch)
         else:
-            outputs = model(inputs, targets, epoch)
-        
-        # Calculate loss based on loss type
+            predictions, _ = model(inputs, labels=None, epoch=None)
+
+        predictions = predictions.squeeze(-1) if predictions.ndim > 1 and predictions.shape[-1] == 1 else predictions
+        targets = targets.squeeze(-1) if targets.ndim > 1 and targets.shape[-1] == 1 else targets
+        weights = weights.squeeze(-1) if weights.ndim > 1 and weights.shape[-1] == 1 else weights
+
         if args.bmse:
-            loss = criterion(outputs, targets)
+            loss = criterion(predictions, targets)
         else:
-            loss = criterion(outputs, targets, weights)
-        
-        # Check for exploding loss
+            loss = criterion(predictions, targets, weights)
+
         assert not (np.isnan(loss.item()) or loss.item() > 1e6), f"Loss explosion: {loss.item()}"
 
         # Update running loss average
@@ -394,8 +531,9 @@ def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Opt
 
         # Track additional metrics for balanced MSE
         if args.bmse:
-            noise_var.update(criterion.noise_sigma.item() ** 2)
-            l2.update(F.mse_loss(outputs, targets).item())
+            if hasattr(criterion, 'noise_sigma') and criterion.noise_sigma is not None:
+                noise_var.update(criterion.noise_sigma.item() ** 2)
+            l2.update(F.mse_loss(predictions, targets).item())
 
         # Backward pass and optimization
         optimizer.zero_grad()
@@ -410,31 +548,47 @@ def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Opt
         if idx % args.print_freq == 0:
             progress.display(idx)
 
-    # Update FDS statistics if enabled and past the start epoch
-    if args.fds and epoch >= args.start_update:
-        print(f"Create Epoch [{epoch}] features of all training data...")
-        encodings, labels = [], []
-        
-        # Collect features and labels without gradient computation
+    if args.fds and epoch >= args.start_update and hasattr(model, 'fds_module') and model.fds_module is not None:
+        print(f"Updating FDS statistics for Epoch [{epoch}]...")
+        encodings, labels_list = [], []
+        model.eval()
         with torch.no_grad():
-            for (inputs, targets, _) in tqdm(train_loader):
-                inputs = inputs.cuda(non_blocking=True)
-                outputs, feature = model(inputs, targets, epoch)
-                encodings.extend(feature.data.squeeze().cpu().numpy())
-                labels.extend(targets.data.squeeze().cpu().numpy())
+            for (inputs, targets, _) in tqdm(train_loader, desc="FDS Feature Extraction"):
+                if args.gpu is not None:
+                    inputs, targets = inputs.cuda(args.gpu, non_blocking=True), targets.cuda(args.gpu, non_blocking=True)
+                else:
+                    inputs, targets = inputs.cpu(), targets.cpu()
 
-        # Convert lists to tensors and move to GPU
-        encodings, labels = torch.from_numpy(np.vstack(encodings)).cuda(), torch.from_numpy(np.hstack(labels)).cuda()
-        
-        # Update FDS statistics
-        model.module.FDS.update_last_epoch_stats(epoch)
-        model.module.FDS.update_running_stats(encodings, labels, epoch)
+                _, feature = model(inputs, labels=None, epoch=None)
+
+                encodings.append(feature.detach().cpu().numpy())
+                labels_list.append(targets.detach().cpu().numpy())
+
+        encodings = np.vstack(encodings)
+        labels_array = np.concatenate([lbl.squeeze() if lbl.ndim > 1 and lbl.shape[-1] == 1 else lbl for lbl in labels_list])
+
+        encodings_tensor = torch.from_numpy(encodings)
+        labels_tensor = torch.from_numpy(labels_array)
+        if args.gpu is not None:
+            encodings_tensor = encodings_tensor.cuda(args.gpu)
+            labels_tensor = labels_tensor.cuda(args.gpu)
+
+        print(f"Calling FDS update with {encodings_tensor.shape} features and {labels_tensor.shape} labels.")
+        fds_module = model.fds_module
+        fds_module.update_last_epoch_stats(epoch)
+        fds_module.update_running_stats(encodings_tensor, labels_tensor, epoch)
+        print("FDS statistics updated.")
+        model.train()
 
     return losses.avg
 
 
-def validate(val_loader: DataLoader, model: nn.Module, train_labels: Optional[List] = None, 
-             prefix: str = 'Val') -> Tuple[float, float, float, float, float]:
+def validate(
+        val_loader: DataLoader, 
+        model: nn.Module, 
+        train_labels: Optional[List] = None, 
+        prefix: str = 'Val'
+    ) -> Tuple[float, float, float, float, float]:
     """
     Evaluate the model on validation or test data.
     
@@ -454,8 +608,8 @@ def validate(val_loader: DataLoader, model: nn.Module, train_labels: Optional[Li
     """
     # Initialize meters for tracking time and performance
     batch_time = AverageMeter('Time', ':6.3f')
-    losses_mse = AverageMeter('Loss (MSE)', ':.3f')
-    losses_l1 = AverageMeter('Loss (L1)', ':.3f')
+    losses_mse = AverageMeter('Loss (MSE)', ':.4f')
+    losses_l1 = AverageMeter('Loss (L1)', ':.4f')
     progress = ProgressMeter(
         len(val_loader),
         [batch_time, losses_mse, losses_l1],
@@ -469,30 +623,30 @@ def validate(val_loader: DataLoader, model: nn.Module, train_labels: Optional[Li
 
     # Set model to evaluation mode
     model.eval()
-    losses_all = []
-    preds, labels = [], []
-    
-    # Evaluate without gradient computation
+    all_losses_l1_for_gmean = []
+    preds_list, labels_list = [], []
+
     with torch.no_grad():
         end = time.time()
         for idx, (inputs, targets, _) in enumerate(val_loader):
-            # Move data to GPU
-            inputs, targets = inputs.cuda(non_blocking=True), targets.cuda(non_blocking=True)
-            
-            # Forward pass
-            outputs = model(inputs)
+            if args.gpu is not None:
+                inputs, targets = inputs.cuda(args.gpu, non_blocking=True), targets.cuda(args.gpu, non_blocking=True)
+            else:
+                inputs, targets = inputs.cpu(), targets.cpu()
 
-            # Collect predictions and labels for later analysis
-            preds.extend(outputs.data.cpu().numpy())
-            labels.extend(targets.data.cpu().numpy())
+            predictions, _ = model(inputs, labels=None, epoch=None)
 
-            # Calculate different loss metrics
-            loss_mse = criterion_mse(outputs, targets)
-            loss_l1 = criterion_l1(outputs, targets)
-            loss_all = criterion_gmean(outputs, targets)
-            losses_all.extend(loss_all.cpu().numpy())
+            predictions = predictions.squeeze(-1) if predictions.ndim > 1 and predictions.shape[-1] == 1 else predictions
+            targets = targets.squeeze(-1) if targets.ndim > 1 and targets.shape[-1] == 1 else targets
 
-            # Update running averages
+            preds_list.append(predictions.detach().cpu().numpy())
+            labels_list.append(targets.detach().cpu().numpy())
+
+            loss_mse = criterion_mse(predictions, targets)
+            loss_l1 = criterion_l1(predictions, targets)
+            loss_l1_all = criterion_gmean(predictions, targets)
+            all_losses_l1_for_gmean.append(loss_l1_all.detach().cpu().numpy())
+
             losses_mse.update(loss_mse.item(), inputs.size(0))
             losses_l1.update(loss_l1.item(), inputs.size(0))
 
@@ -505,12 +659,12 @@ def validate(val_loader: DataLoader, model: nn.Module, train_labels: Optional[Li
                 progress.display(idx)
 
         # Calculate balanced metrics and shot-based metrics
-        mean_MSE, mean_L1 = balanced_metrics(np.hstack(preds), np.hstack(labels))
-        shot_dict = shot_metrics(np.hstack(preds), np.hstack(labels), train_labels)
-        shot_dict_balanced = shot_metrics_balanced(np.hstack(preds), np.hstack(labels), train_labels)
+        mean_MSE, mean_L1 = balanced_metrics(np.hstack(preds_list), np.hstack(labels_list))
+        shot_dict = shot_metrics(np.hstack(preds_list), np.hstack(labels_list), train_labels)
+        shot_dict_balanced = shot_metrics_balanced(np.hstack(preds_list), np.hstack(labels_list), train_labels)
         
         # Calculate geometric mean of all losses
-        loss_gmean = gmean(np.hstack(losses_all), axis=None).astype(float)
+        loss_gmean = gmean(np.hstack(all_losses_l1_for_gmean), axis=None).astype(float)
         
         # Print detailed performance metrics
         print(f" * Overall: MSE {losses_mse.avg:.3f}\tL1 {losses_l1.avg:.3f}\tG-Mean {loss_gmean:.3f}")
