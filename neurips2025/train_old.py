@@ -5,9 +5,7 @@ from tqdm import tqdm
 import pandas as pd
 from collections import defaultdict
 from scipy.stats import gmean
-from typing import Dict, List, Tuple, Optional, Union, Any
 
-import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader
@@ -21,19 +19,17 @@ from balanaced_mse import *
 
 import os
 
-# Disable KMP warnings
 os.environ["KMP_WARNINGS"] = "FALSE"
 
-# Set up command line argument parser
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-# ----- Imbalanced learning related arguments -----
-# LDS (Label Distribution Smoothing)
+# imbalanced related
+# LDS
 parser.add_argument('--lds', action='store_true', default=False, help='whether to enable LDS')
 parser.add_argument('--lds_kernel', type=str, default='gaussian',
                     choices=['gaussian', 'triang', 'laplace'], help='LDS kernel type')
 parser.add_argument('--lds_ks', type=int, default=5, help='LDS kernel size: should be odd number')
 parser.add_argument('--lds_sigma', type=float, default=1, help='LDS gaussian/laplace kernel sigma')
-# FDS (Feature Distribution Smoothing)
+# FDS
 parser.add_argument('--fds', action='store_true', default=False, help='whether to enable FDS')
 parser.add_argument('--fds_kernel', type=str, default='gaussian',
                     choices=['gaussian', 'triang', 'laplace'], help='FDS kernel type')
@@ -46,7 +42,7 @@ parser.add_argument('--bucket_start', type=int, default=0, choices=[0, 3],
                     help='minimum(starting) bucket for FDS, 0 for IMDBWIKI, 3 for AgeDB')
 parser.add_argument('--fds_mmt', type=float, default=0.9, help='FDS momentum')
 
-# BMSE (Balanced MSE)
+# BMSE
 parser.add_argument('--bmse', action='store_true', default=False, help='use Balanced MSE')
 parser.add_argument('--imp', type=str, default='gai', choices=['gai', 'bmc', 'bni'], help='implementation options')
 parser.add_argument('--gmm', type=str, default='gmm.pkl', help='path to preprocessed GMM')
@@ -55,20 +51,20 @@ parser.add_argument('--sigma_lr', type=float, default=1e-2, help='learning rate 
 parser.add_argument('--balanced_metric', action='store_true', default=False, help='use balanced metric')
 parser.add_argument('--fix_noise_sigma', action='store_true', default=False, help='disable joint optimization')
 
-# Re-weighting: SQRT_INV / INV
+# re-weighting: SQRT_INV / INV
 parser.add_argument('--reweight', type=str, default='none', choices=['none', 'sqrt_inv', 'inverse'],
                     help='cost-sensitive reweighting scheme')
-# Two-stage training: RRT (Regressor Re-Training)
+# two-stage training: RRT
 parser.add_argument('--retrain_fc', action='store_true', default=False,
                     help='whether to retrain last regression layer (regressor)')
 
-# ----- Training/optimization related arguments -----
+# training/optimization related
 parser.add_argument('--dataset', type=str, default='imdb_wiki', choices=['imdb_wiki', 'agedb'], help='dataset name')
 parser.add_argument('--data_dir', type=str, default='./data', help='data directory')
 parser.add_argument('--model', type=str, default='resnet50', help='model name')
 parser.add_argument('--store_root', type=str, default='checkpoint', help='root path for storing checkpoints, logs')
 parser.add_argument('--store_name', type=str, default='', help='experiment store name')
-parser.add_argument('--gpu', type=int, default=None, help='GPU ID to use')
+parser.add_argument('--gpu', type=int, default=None)
 parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'sgd'], help='optimizer type')
 parser.add_argument('--loss', type=str, default='l1', choices=['mse', 'l1', 'focal_l1', 'focal_mse', 'huber'],
                     help='training loss type')
@@ -81,7 +77,7 @@ parser.add_argument('--batch_size', type=int, default=256, help='batch size')
 parser.add_argument('--print_freq', type=int, default=10, help='logging frequency')
 parser.add_argument('--img_size', type=int, default=224, help='image size used in training')
 parser.add_argument('--workers', type=int, default=32, help='number of workers used in data loading')
-# Checkpoints
+# checkpoints
 parser.add_argument('--resume', type=str, default='', help='checkpoint file path to resume training')
 parser.add_argument('--pretrained', type=str, default='', help='checkpoint file path to load backbone weights')
 parser.add_argument('--evaluate', action='store_true', help='evaluate only flag')
@@ -89,10 +85,8 @@ parser.add_argument('--evaluate', action='store_true', help='evaluate only flag'
 parser.set_defaults(augment=True)
 args, unknown = parser.parse_known_args()
 
-# Initialize training state variables
 args.start_epoch, args.best_loss = 0, 1e5
 
-# Build experiment name based on configuration
 if len(args.store_name):
     args.store_name = f'_{args.store_name}'
 if not args.lds and args.reweight != 'none':
@@ -116,10 +110,8 @@ if args.balanced_metric:
     args.store_name += f'_balanced_metric'
 args.store_name = f"{args.dataset}_{args.model}{args.store_name}_{args.optimizer}_{args.loss}_{args.lr}_{args.batch_size}"
 
-# Create folders for storing results
 prepare_folders(args)
 
-# Set up logging
 logging.root.handlers = []
 logging.basicConfig(
     level=logging.INFO,
@@ -132,39 +124,26 @@ print = logging.info
 print(f"Args: {args}")
 print(f"Store name: {args.store_name}")
 
-# Initialize TensorBoard logger
 tb_logger = Logger(logdir=os.path.join(args.store_root, args.store_name), flush_secs=2)
 
 
-def main() -> None:
-    """
-    Main function to run the training/evaluation pipeline.
-    
-    This function handles:
-    1. Setting up the GPU
-    2. Loading and preparing datasets
-    3. Building the model
-    4. Setting up loss functions and optimizers
-    5. Training/evaluating the model
-    """
+def main():
     if args.gpu is not None:
         print(f"Use GPU: {args.gpu} for training")
 
-    # Data preparation
+    # Data
     print('=====> Preparing data...')
     print(f"File (.csv): {args.dataset}.csv")
     df = pd.read_csv(os.path.join(args.data_dir, f"{args.dataset}.csv"))
     df_train, df_val, df_test = df[df['split'] == 'train'], df[df['split'] == 'val'], df[df['split'] == 'test']
     train_labels = df_train['age']
 
-    # Create datasets with appropriate transformations and sampling strategies
     train_dataset = IMDBWIKI(data_dir=args.data_dir, df=df_train, img_size=args.img_size, split='train',
                              reweight=args.reweight, lds=args.lds, lds_kernel=args.lds_kernel, lds_ks=args.lds_ks,
                              lds_sigma=args.lds_sigma)
     val_dataset = IMDBWIKI(data_dir=args.data_dir, df=df_val, img_size=args.img_size, split='val')
     test_dataset = IMDBWIKI(data_dir=args.data_dir, df=df_test, img_size=args.img_size, split='test')
 
-    # Create data loaders
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
                               num_workers=args.workers, pin_memory=True, drop_last=False)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False,
@@ -175,14 +154,14 @@ def main() -> None:
     print(f"Validation data size: {len(val_dataset)}")
     print(f"Test data size: {len(test_dataset)}")
 
-    # Model initialization
+    # Model
     print('=====> Building model...')
     model = resnet50(fds=args.fds, bucket_num=args.bucket_num, bucket_start=args.bucket_start,
                      start_update=args.start_update, start_smooth=args.start_smooth,
                      kernel=args.fds_kernel, ks=args.fds_ks, sigma=args.fds_sigma, momentum=args.fds_mmt)
     model = torch.nn.DataParallel(model).cuda()
 
-    # Evaluation mode - load model and evaluate
+    # evaluate only
     if args.evaluate:
         assert args.resume, 'Specify a trained model using [args.resume]'
         checkpoint = torch.load(args.resume)
@@ -191,22 +170,19 @@ def main() -> None:
         validate(test_loader, model, train_labels=train_labels, prefix='Test')
         return
 
-    # For retraining only the final layer (transfer learning)
     if args.retrain_fc:
         assert args.reweight != 'none' and args.pretrained or args.bmse
         print('===> Retrain last regression layer only!')
-        # Freeze all layers except the final regression layer
         for name, param in model.named_parameters():
             if 'fc' not in name and 'linear' not in name:
                 param.requires_grad = False
 
-    # Set up optimizer
+    # Loss and optimizer
     if not args.retrain_fc:
-        # Optimize all parameters
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr) if args.optimizer == 'adam' else \
             torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     else:
-        # Optimize only the last linear layer parameters
+        # optimize only the last linear layer
         parameters = list(filter(lambda p: p.requires_grad, model.parameters()))
         names = list(filter(lambda k: k is not None,
                             [k if v.requires_grad else None for k, v in model.module.named_parameters()]))
@@ -215,12 +191,10 @@ def main() -> None:
         optimizer = torch.optim.Adam(parameters, lr=args.lr) if args.optimizer == 'adam' else \
             torch.optim.SGD(parameters, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
 
-    # Load pretrained weights if specified
     if args.pretrained:
         checkpoint = torch.load(args.pretrained, map_location="cpu")
         from collections import OrderedDict
         new_state_dict = OrderedDict()
-        # Only load non-classifier weights
         for k, v in checkpoint['state_dict'].items():
             if 'linear' not in k and 'fc' not in k:
                 new_state_dict[k] = v
@@ -228,7 +202,6 @@ def main() -> None:
         print(f'===> Pretrained weights found in total: [{len(list(new_state_dict.keys()))}]')
         print(f'===> Pre-trained model loaded: {args.pretrained}')
 
-    # Resume from checkpoint if specified
     if args.resume:
         if os.path.isfile(args.resume):
             print(f"===> Loading checkpoint '{args.resume}'")
@@ -242,53 +215,36 @@ def main() -> None:
         else:
             print(f"===> No checkpoint found at '{args.resume}'")
 
-    # Enable CUDA optimization
     cudnn.benchmark = True
 
-    # Set up loss function
     if args.bmse:
         if args.imp == 'gai':
             criterion = GAILoss(args.init_noise_sigma, args.gmm)
         elif args.imp == 'bmc':
             criterion = BMCLoss(args.init_noise_sigma)
         elif args.imp == 'bni':
-            # Get bucket information for BNI loss
             bucket_centers, bucket_weights = train_dataset.get_bucket_info(
                 max_target=200, lds=args.lds, lds_kernel=args.lds_kernel, lds_ks=args.lds_ks, lds_sigma=args.lds_sigma)
             criterion = BNILoss(args.init_noise_sigma, bucket_centers, bucket_weights)
         else:
             raise NotImplementedError
-        
-        # Add noise sigma parameter to optimizer if not fixed
         if not args.fix_noise_sigma:
             optimizer.add_param_group({'params': criterion.noise_sigma, 'lr': args.sigma_lr, 'name': 'noise_sigma'})
     else:
-        # Use standard weighted loss functions
         criterion = globals()[f"weighted_{args.loss}_loss"]
 
-    # Training loop
     for epoch in range(args.start_epoch, args.epoch):
-        # Adjust learning rate according to schedule
         adjust_learning_rate(optimizer, epoch, args)
-        
-        # Train for one epoch
         train_loss = train(train_loader, model, optimizer, epoch, criterion)
-        
-        # Evaluate on validation set
         val_loss_mse, val_loss_l1, val_loss_gmean, mean_MSE, mean_L1 = validate(val_loader, model,
                                                                                 train_labels=train_labels)
 
-        # Determine which metric to use for model selection
         loss_metric = val_loss_mse if args.loss == 'mse' else val_loss_l1
         if args.balanced_metric:
             loss_metric = mean_MSE if args.loss == 'mse' else mean_L1
-            
-        # Check if current model is the best so far
         is_best = loss_metric < args.best_loss
         args.best_loss = min(loss_metric, args.best_loss)
         print(f"Best {'L1' if 'l1' in args.loss else 'MSE'} Loss: {args.best_loss:.3f}")
-        
-        # Save checkpoint
         save_checkpoint(args, {
             'epoch': epoch + 1,
             'model': args.model,
@@ -296,62 +252,39 @@ def main() -> None:
             'state_dict': model.state_dict(),
             'optimizer': optimizer.state_dict(),
         }, is_best)
-        
         print(f"Epoch #{epoch}: Train loss [{train_loss:.4f}]; "
               f"Val loss: MSE [{val_loss_mse:.4f}], L1 [{val_loss_l1:.4f}], G-Mean [{val_loss_gmean:.4f}]")
 
-        # Log metrics to TensorBoard
         tb_logger.log_value('train_loss', train_loss, epoch)
         tb_logger.log_value('val_loss_mse', val_loss_mse, epoch)
         tb_logger.log_value('val_loss_l1', val_loss_l1, epoch)
         tb_logger.log_value('val_loss_gmean', val_loss_gmean, epoch)
 
-    # Test with best checkpoint after training
+    # test with best checkpoint
     print("=" * 120)
     print("Test best model on testset...")
     checkpoint = torch.load(f"{args.store_root}/{args.store_name}/ckpt.best.pth.tar")
     model.load_state_dict(checkpoint['state_dict'])
     print(f"Loaded best model, epoch {checkpoint['epoch']}, best val loss {checkpoint['best_loss']:.4f}")
-    
-    # Evaluate on test set
     test_loss_mse, test_loss_l1, test_loss_gmean, mean_MSE, mean_L1 = validate(test_loader, model,
                                                                                train_labels=train_labels, prefix='Test')
     print(
         f"Test loss: bMSE [{mean_MSE:.4f}], bMAE [{mean_L1:.4f}], MSE [{test_loss_mse:.4f}], L1 [{test_loss_l1:.4f}], G-Mean [{test_loss_gmean:.4f}]\nDone")
 
 
-def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Optimizer, epoch: int, criterion: nn.Module) -> float:
-    """
-    Train the model for one epoch.
-    
-    Args:
-        train_loader: DataLoader for training data
-        model: The neural network model
-        optimizer: Optimizer for updating model weights
-        epoch: Current epoch number
-        criterion: Loss function
-        
-    Returns:
-        float: Average training loss for the epoch
-    """
-    # Initialize meters for tracking time and performance
+def train(train_loader, model, optimizer, epoch, criterion):
     batch_time = AverageMeter('Time', ':6.2f')
     data_time = AverageMeter('Data', ':6.4f')
-    
-    # Set up loss meter with appropriate name based on loss type
     if args.bmse:
         losses = AverageMeter(f'Loss ({args.imp.upper()})', ':.3f')
     else:
         losses = AverageMeter(f'Loss ({args.loss.upper()})', ':.3f')
-    
-    # Initialize progress meter
     progress = ProgressMeter(
         len(train_loader),
         [batch_time, data_time, losses],
         prefix="Epoch: [{}]".format(epoch)
     )
 
-    # Add additional metrics for balanced MSE if enabled
     if args.bmse:
         noise_var = AverageMeter('Noise Var', ':.5f')
         l2 = AverageMeter('L2', ':.5f')
@@ -361,61 +294,40 @@ def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Opt
             prefix="Epoch: [{}]".format(epoch)
         )
 
-    # Set model to training mode
     model.train()
     end = time.time()
-    
-    # Iterate through batches
     for idx, (inputs, targets, weights) in enumerate(train_loader):
-        # Measure data loading time
         data_time.update(time.time() - end)
-        
-        # Move data to GPU
         inputs, targets, weights = \
             inputs.cuda(non_blocking=True), targets.cuda(non_blocking=True), weights.cuda(non_blocking=True)
-        
-        # Forward pass - handle FDS (Feature Distribution Smoothing) if enabled
         if args.fds:
             outputs, _ = model(inputs, targets, epoch)
         else:
             outputs = model(inputs, targets, epoch)
-        
-        # Calculate loss based on loss type
         if args.bmse:
             loss = criterion(outputs, targets)
         else:
             loss = criterion(outputs, targets, weights)
-        
-        # Check for exploding loss
         assert not (np.isnan(loss.item()) or loss.item() > 1e6), f"Loss explosion: {loss.item()}"
 
-        # Update running loss average
         losses.update(loss.item(), inputs.size(0))
 
-        # Track additional metrics for balanced MSE
         if args.bmse:
             noise_var.update(criterion.noise_sigma.item() ** 2)
             l2.update(F.mse_loss(outputs, targets).item())
 
-        # Backward pass and optimization
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-        # Measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
-        
-        # Print progress at specified intervals
         if idx % args.print_freq == 0:
             progress.display(idx)
 
-    # Update FDS statistics if enabled and past the start epoch
     if args.fds and epoch >= args.start_update:
         print(f"Create Epoch [{epoch}] features of all training data...")
         encodings, labels = [], []
-        
-        # Collect features and labels without gradient computation
         with torch.no_grad():
             for (inputs, targets, _) in tqdm(train_loader):
                 inputs = inputs.cuda(non_blocking=True)
@@ -423,36 +335,14 @@ def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Opt
                 encodings.extend(feature.data.squeeze().cpu().numpy())
                 labels.extend(targets.data.squeeze().cpu().numpy())
 
-        # Convert lists to tensors and move to GPU
         encodings, labels = torch.from_numpy(np.vstack(encodings)).cuda(), torch.from_numpy(np.hstack(labels)).cuda()
-        
-        # Update FDS statistics
         model.module.FDS.update_last_epoch_stats(epoch)
         model.module.FDS.update_running_stats(encodings, labels, epoch)
 
     return losses.avg
 
 
-def validate(val_loader: DataLoader, model: nn.Module, train_labels: Optional[List] = None, 
-             prefix: str = 'Val') -> Tuple[float, float, float, float, float]:
-    """
-    Evaluate the model on validation or test data.
-    
-    Args:
-        val_loader: DataLoader for validation/test data
-        model: The neural network model
-        train_labels: Labels from training set (used for shot metrics)
-        prefix: Prefix for progress display ('Val' or 'Test')
-        
-    Returns:
-        Tuple containing:
-            - MSE loss average
-            - L1 loss average
-            - Geometric mean of losses
-            - Balanced MSE
-            - Balanced L1/MAE
-    """
-    # Initialize meters for tracking time and performance
+def validate(val_loader, model, train_labels=None, prefix='Val'):
     batch_time = AverageMeter('Time', ':6.3f')
     losses_mse = AverageMeter('Loss (MSE)', ':.3f')
     losses_l1 = AverageMeter('Loss (L1)', ':.3f')
@@ -462,57 +352,39 @@ def validate(val_loader: DataLoader, model: nn.Module, train_labels: Optional[Li
         prefix=f'{prefix}: '
     )
 
-    # Define loss functions
     criterion_mse = nn.MSELoss()
     criterion_l1 = nn.L1Loss()
-    criterion_gmean = nn.L1Loss(reduction='none')  # For calculating geometric mean
+    criterion_gmean = nn.L1Loss(reduction='none')
 
-    # Set model to evaluation mode
     model.eval()
     losses_all = []
     preds, labels = [], []
-    
-    # Evaluate without gradient computation
     with torch.no_grad():
         end = time.time()
         for idx, (inputs, targets, _) in enumerate(val_loader):
-            # Move data to GPU
             inputs, targets = inputs.cuda(non_blocking=True), targets.cuda(non_blocking=True)
-            
-            # Forward pass
             outputs = model(inputs)
 
-            # Collect predictions and labels for later analysis
             preds.extend(outputs.data.cpu().numpy())
             labels.extend(targets.data.cpu().numpy())
 
-            # Calculate different loss metrics
             loss_mse = criterion_mse(outputs, targets)
             loss_l1 = criterion_l1(outputs, targets)
             loss_all = criterion_gmean(outputs, targets)
             losses_all.extend(loss_all.cpu().numpy())
 
-            # Update running averages
             losses_mse.update(loss_mse.item(), inputs.size(0))
             losses_l1.update(loss_l1.item(), inputs.size(0))
 
-            # Measure elapsed time
             batch_time.update(time.time() - end)
             end = time.time()
-            
-            # Print progress at specified intervals
             if idx % args.print_freq == 0:
                 progress.display(idx)
 
-        # Calculate balanced metrics and shot-based metrics
         mean_MSE, mean_L1 = balanced_metrics(np.hstack(preds), np.hstack(labels))
         shot_dict = shot_metrics(np.hstack(preds), np.hstack(labels), train_labels)
         shot_dict_balanced = shot_metrics_balanced(np.hstack(preds), np.hstack(labels), train_labels)
-        
-        # Calculate geometric mean of all losses
         loss_gmean = gmean(np.hstack(losses_all), axis=None).astype(float)
-        
-        # Print detailed performance metrics
         print(f" * Overall: MSE {losses_mse.avg:.3f}\tL1 {losses_l1.avg:.3f}\tG-Mean {loss_gmean:.3f}")
         print('-' * 40)
         print(f" * Many: MSE {shot_dict['many']['mse']:.3f}\t"
@@ -530,25 +402,10 @@ def validate(val_loader: DataLoader, model: nn.Module, train_labels: Optional[Li
               f"bMAE {shot_dict_balanced['median']['l1']:.3f}\tG-Mean {shot_dict_balanced['median']['gmean']:.3f}")
         print(f" * Low: bMSE {shot_dict_balanced['low']['mse']:.3f}\t"
               f"bMAE {shot_dict_balanced['low']['l1']:.3f}\tG-Mean {shot_dict_balanced['low']['gmean']:.3f}")
-              
     return losses_mse.avg, losses_l1.avg, loss_gmean, mean_MSE, mean_L1
 
 
-def balanced_metrics(preds: Union[np.ndarray, torch.Tensor], 
-                    labels: Union[np.ndarray, torch.Tensor]) -> Tuple[float, float]:
-    """
-    Calculate balanced MSE and L1 metrics by averaging per-class errors.
-    
-    Args:
-        preds: Model predictions
-        labels: Ground truth labels
-        
-    Returns:
-        Tuple containing:
-            - mean_mse: Mean of per-class MSE values
-            - mean_l1: Mean of per-class L1/MAE values
-    """
-    # Convert tensors to numpy arrays if needed
+def balanced_metrics(preds, labels):
     if isinstance(preds, torch.Tensor):
         preds = preds.detach().cpu().numpy()
         labels = labels.detach().cpu().numpy()
@@ -557,40 +414,19 @@ def balanced_metrics(preds: Union[np.ndarray, torch.Tensor],
     else:
         raise TypeError(f'Type ({type(preds)}) of predictions not supported')
 
-    # Calculate per-class metrics
     mse_per_class, l1_per_class = [], []
     for l in np.unique(labels):
-        # Calculate MSE and L1 for each unique label/class
         mse_per_class.append(np.mean((preds[labels == l] - labels[labels == l]) ** 2))
         l1_per_class.append(np.mean(np.abs(preds[labels == l] - labels[labels == l])))
 
-    # Average the per-class metrics
     mean_mse = sum(mse_per_class) / len(mse_per_class)
     mean_l1 = sum(l1_per_class) / len(l1_per_class)
     return mean_mse, mean_l1
 
 
-def shot_metrics_balanced(preds: Union[np.ndarray, torch.Tensor], 
-                         labels: Union[np.ndarray, torch.Tensor], 
-                         train_labels: List, 
-                         many_shot_thr: int = 100, 
-                         low_shot_thr: int = 20) -> Dict[str, Dict[str, float]]:
-    """
-    Calculate balanced metrics for different data frequency groups (many/median/low-shot).
-    
-    Args:
-        preds: Model predictions
-        labels: Ground truth labels
-        train_labels: Labels from training set to determine frequency groups
-        many_shot_thr: Threshold for many-shot classes (>= this value)
-        low_shot_thr: Threshold for low-shot classes (< this value)
-        
-    Returns:
-        Dictionary with metrics for each shot group (many/median/low)
-    """
+def shot_metrics_balanced(preds, labels, train_labels, many_shot_thr=100, low_shot_thr=20):
     train_labels = np.array(train_labels).astype(int)
 
-    # Convert tensors to numpy arrays if needed
     if isinstance(preds, torch.Tensor):
         preds = preds.detach().cpu().numpy()
         labels = labels.detach().cpu().numpy()
@@ -599,11 +435,8 @@ def shot_metrics_balanced(preds: Union[np.ndarray, torch.Tensor],
     else:
         raise TypeError(f'Type ({type(preds)}) of predictions not supported')
 
-    # Initialize lists to store metrics
     train_class_count, test_class_count = [], []
     mse_per_class, l1_per_class, l1_all_per_class = [], [], []
-    
-    # Calculate per-class metrics
     for l in np.unique(labels):
         train_class_count.append(len(train_labels[train_labels == l]))
         test_class_count.append(len(labels[labels == l]))
@@ -611,16 +444,13 @@ def shot_metrics_balanced(preds: Union[np.ndarray, torch.Tensor],
         l1_per_class.append(np.mean(np.abs(preds[labels == l] - labels[labels == l])))
         l1_all_per_class.append(np.abs(preds[labels == l] - labels[labels == l]))
 
-    # Separate metrics by shot category (many/median/low)
     many_shot_mse, median_shot_mse, low_shot_mse = [], [], []
     many_shot_l1, median_shot_l1, low_shot_l1 = [], [], []
     many_shot_gmean, median_shot_gmean, low_shot_gmean = [], [], []
     many_shot_cnt, median_shot_cnt, low_shot_cnt = [], [], []
 
-    # Categorize each class based on its frequency in training set
     for i in range(len(train_class_count)):
         if train_class_count[i] > many_shot_thr:
-            # Many-shot class (frequent)
             many_shot_mse.append(mse_per_class[i])
             many_shot_l1.append(l1_per_class[i])
             many_shot_gmean += list(l1_all_per_class[i])
@@ -628,30 +458,23 @@ def shot_metrics_balanced(preds: Union[np.ndarray, torch.Tensor],
 
 
         elif train_class_count[i] < low_shot_thr:
-            # Low-shot class (rare)
             low_shot_mse.append(mse_per_class[i])
             low_shot_l1.append(l1_per_class[i])
             low_shot_gmean += list(l1_all_per_class[i])
             low_shot_cnt.append(test_class_count[i])
         else:
-            # Median-shot class (medium frequency)
             median_shot_mse.append(mse_per_class[i])
             median_shot_l1.append(l1_per_class[i])
             median_shot_gmean += list(l1_all_per_class[i])
             median_shot_cnt.append(test_class_count[i])
 
-    # Compile results into a dictionary
     shot_dict = defaultdict(dict)
-    
-    # Calculate balanced metrics (simple average of per-class metrics)
     shot_dict['many']['mse'] = np.sum(many_shot_mse) / len(many_shot_mse)
     shot_dict['many']['l1'] = np.sum(many_shot_l1) / len(many_shot_l1)
     shot_dict['many']['gmean'] = gmean(np.hstack(many_shot_gmean), axis=None).astype(float)
-    
     shot_dict['median']['mse'] = np.sum(median_shot_mse) / len(median_shot_mse)
     shot_dict['median']['l1'] = np.sum(median_shot_l1) / len(median_shot_l1)
     shot_dict['median']['gmean'] = gmean(np.hstack(median_shot_gmean), axis=None).astype(float)
-    
     shot_dict['low']['mse'] = np.sum(low_shot_mse) / len(low_shot_mse)
     shot_dict['low']['l1'] = np.sum(low_shot_l1) / len(low_shot_l1)
     shot_dict['low']['gmean'] = gmean(np.hstack(low_shot_gmean), axis=None).astype(float)
@@ -659,27 +482,9 @@ def shot_metrics_balanced(preds: Union[np.ndarray, torch.Tensor],
     return shot_dict
 
 
-def shot_metrics(preds: Union[np.ndarray, torch.Tensor], 
-                labels: Union[np.ndarray, torch.Tensor], 
-                train_labels: List, 
-                many_shot_thr: int = 100, 
-                low_shot_thr: int = 20) -> Dict[str, Dict[str, float]]:
-    """
-    Calculate standard (weighted) metrics for different data frequency groups (many/median/low-shot).
-    
-    Args:
-        preds: Model predictions
-        labels: Ground truth labels
-        train_labels: Labels from training set to determine frequency groups
-        many_shot_thr: Threshold for many-shot classes (>= this value)
-        low_shot_thr: Threshold for low-shot classes (< this value)
-        
-    Returns:
-        Dictionary with metrics for each shot group (many/median/low)
-    """
+def shot_metrics(preds, labels, train_labels, many_shot_thr=100, low_shot_thr=20):
     train_labels = np.array(train_labels).astype(int)
 
-    # Convert tensors to numpy arrays if needed
     if isinstance(preds, torch.Tensor):
         preds = preds.detach().cpu().numpy()
         labels = labels.detach().cpu().numpy()
@@ -688,11 +493,8 @@ def shot_metrics(preds: Union[np.ndarray, torch.Tensor],
     else:
         raise TypeError(f'Type ({type(preds)}) of predictions not supported')
 
-    # Initialize lists to store metrics
     train_class_count, test_class_count = [], []
     mse_per_class, l1_per_class, l1_all_per_class = [], [], []
-    
-    # Calculate per-class metrics (sum of errors, not mean)
     for l in np.unique(labels):
         train_class_count.append(len(train_labels[train_labels == l]))
         test_class_count.append(len(labels[labels == l]))
@@ -700,45 +502,35 @@ def shot_metrics(preds: Union[np.ndarray, torch.Tensor],
         l1_per_class.append(np.sum(np.abs(preds[labels == l] - labels[labels == l])))
         l1_all_per_class.append(np.abs(preds[labels == l] - labels[labels == l]))
 
-    # Separate metrics by shot category (many/median/low)
     many_shot_mse, median_shot_mse, low_shot_mse = [], [], []
     many_shot_l1, median_shot_l1, low_shot_l1 = [], [], []
     many_shot_gmean, median_shot_gmean, low_shot_gmean = [], [], []
     many_shot_cnt, median_shot_cnt, low_shot_cnt = [], [], []
 
-    # Categorize each class based on its frequency in training set
     for i in range(len(train_class_count)):
         if train_class_count[i] > many_shot_thr:
-            # Many-shot class (frequent)
             many_shot_mse.append(mse_per_class[i])
             many_shot_l1.append(l1_per_class[i])
             many_shot_gmean += list(l1_all_per_class[i])
             many_shot_cnt.append(test_class_count[i])
         elif train_class_count[i] < low_shot_thr:
-            # Low-shot class (rare)
             low_shot_mse.append(mse_per_class[i])
             low_shot_l1.append(l1_per_class[i])
             low_shot_gmean += list(l1_all_per_class[i])
             low_shot_cnt.append(test_class_count[i])
         else:
-            # Median-shot class (medium frequency)
             median_shot_mse.append(mse_per_class[i])
             median_shot_l1.append(l1_per_class[i])
             median_shot_gmean += list(l1_all_per_class[i])
             median_shot_cnt.append(test_class_count[i])
 
-    # Compile results into a dictionary
     shot_dict = defaultdict(dict)
-    
-    # Calculate weighted metrics (weighted by sample count)
     shot_dict['many']['mse'] = np.sum(many_shot_mse) / np.sum(many_shot_cnt)
     shot_dict['many']['l1'] = np.sum(many_shot_l1) / np.sum(many_shot_cnt)
     shot_dict['many']['gmean'] = gmean(np.hstack(many_shot_gmean), axis=None).astype(float)
-    
     shot_dict['median']['mse'] = np.sum(median_shot_mse) / np.sum(median_shot_cnt)
     shot_dict['median']['l1'] = np.sum(median_shot_l1) / np.sum(median_shot_cnt)
     shot_dict['median']['gmean'] = gmean(np.hstack(median_shot_gmean), axis=None).astype(float)
-    
     shot_dict['low']['mse'] = np.sum(low_shot_mse) / np.sum(low_shot_cnt)
     shot_dict['low']['l1'] = np.sum(low_shot_l1) / np.sum(low_shot_cnt)
     shot_dict['low']['gmean'] = gmean(np.hstack(low_shot_gmean), axis=None).astype(float)
