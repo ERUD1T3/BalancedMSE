@@ -1,6 +1,4 @@
-from datasets import IMDBWIKI
 from torch.utils.data import DataLoader
-import pandas as pd
 import argparse
 import os
 import time
@@ -8,7 +6,7 @@ import joblib
 import torch
 from sklearn.mixture import GaussianMixture
 from tqdm import tqdm
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Tuple
 import numpy as np
 
 # Import TabDS and data loading functions from your module
@@ -27,7 +25,7 @@ parser = argparse.ArgumentParser(description='Preprocess tabular data to fit a G
 parser.add_argument('--dataset', type=str, required=True, 
                     choices=['sep', 'sarcos', 'onp', 'bf', 'asc', 'ed'], # Add other dataset names corresponding to build_*_ds functions
                     help='Name of the tabular dataset to preprocess.')
-parser.add_argument('--data_dir', type=str, default='./neurips2025/data', help='Root directory containing dataset subfolders.')
+parser.add_argument('--data_dir', type=str, default='C:/Users/the_3/Documents/github/BalancedMSE/neurips2025/data', help='Root directory containing dataset subfolders.')
 parser.add_argument('--train_split_name', type=str, default='training', 
                     help='Name convention for the training data file (e.g., {dataset}_{split_name}.csv)')
 

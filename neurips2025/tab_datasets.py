@@ -13,13 +13,15 @@ from utils import get_lds_kernel_window
 print = logging.info
 
 
+DEFAULT_NUM_BINS = 200 # Default number of bins for histogram if not provided
+
 class TabDS(data.Dataset):
     """
     Dataset class for generic tabular data.
     
-    This class handles loading tabular data (features X and labels y),
-    including support for re-weighting samples and label distribution smoothing (LDS)
-    for regression or classification tasks where labels represent bins/ordered categories.
+    Handles loading tabular data (features X and labels y), re-weighting, 
+    and label distribution smoothing (LDS) for regression tasks, supporting
+    continuous and potentially negative labels via histogram binning.
     """
     
     def __init__(self, 
@@ -30,33 +32,28 @@ class TabDS(data.Dataset):
                  lds_kernel: str = 'gaussian', 
                  lds_ks: int = 5, 
                  lds_sigma: float = 2,
-                 max_target: Optional[int] = None):
+                 bins: Optional[int] = None): # Renamed max_target to bins
         """
         Initialize the Tabular Dataset.
         
         Args:
             X: NumPy array of features (samples x features).
-            y: NumPy array of labels (samples). Assumed to be numerical for LDS/reweighting.
+            y: NumPy array of labels (samples). Can be continuous.
             reweight: Re-weighting strategy ('none', 'inverse', or 'sqrt_inv').
             lds: Whether to use Label Distribution Smoothing.
             lds_kernel: Kernel type for LDS ('gaussian', 'triang', or 'laplace').
             lds_ks: Kernel size for LDS (should be odd).
             lds_sigma: Sigma parameter for LDS kernel.
-            max_target: Maximum target value to consider for reweighting/LDS. 
-                        If None, it's inferred from the maximum value in y + 1.
+            bins: Number of bins to use for histogram when reweighting/LDS is enabled.
+                  If None, defaults to DEFAULT_NUM_BINS.
         """
         assert X.shape[0] == y.shape[0], "Number of samples in X and y must match."
         self.X = X
         self.y = y
-
-        if max_target is None:
-            # Infer max_target if not provided, assuming integer labels for binning
-            max_target = int(np.max(y)) + 1 if len(y) > 0 else 1
-            print(f"Inferred max_target: {max_target}")
-
+        self.bins = bins # Store bins argument
 
         # Calculate sample weights based on reweighting strategy and LDS
-        self.weights = self._prepare_weights(max_target=max_target, 
+        self.weights = self._prepare_weights(bins=self.bins, # Pass bins argument
                                              reweight=reweight, lds=lds, 
                                              lds_kernel=lds_kernel, lds_ks=lds_ks, 
                                              lds_sigma=lds_sigma)
@@ -80,7 +77,8 @@ class TabDS(data.Dataset):
         
         # Get features and label
         features = self.X[index].astype('float32')
-        label = np.asarray([self.y[index]]).astype('float32') # Keep label as a 1-element array
+        # Ensure label is float32, potentially continuous
+        label = np.asarray([self.y[index]]).astype('float32') 
         
         # Get weight
         weight = np.asarray([self.weights[index]]).astype('float32') if self.weights is not None else np.asarray([np.float32(1.)])
@@ -93,17 +91,17 @@ class TabDS(data.Dataset):
         return features_tensor, label_tensor, weight_tensor
 
     def _prepare_weights(self, 
-                         max_target: int,
+                         bins: Optional[int], # Changed from max_target
                          reweight: str, 
                          lds: bool = False, 
                          lds_kernel: str = 'gaussian', 
                          lds_ks: int = 5, 
-                         lds_sigma: float = 2) -> Optional[List[float]]:
+                         lds_sigma: float = 2) -> Optional[np.ndarray]: # Return numpy array
         """
-        Prepare sample weights based on label distribution.
+        Prepare sample weights based on label distribution using histogram binning.
         
         Args:
-            max_target: Maximum target value to consider (defines the range for counting).
+            bins: Number of bins for histogramming the label distribution.
             reweight: Re-weighting strategy ('none', 'inverse', or 'sqrt_inv').
             lds: Whether to use Label Distribution Smoothing.
             lds_kernel: Kernel type for LDS.
@@ -111,80 +109,113 @@ class TabDS(data.Dataset):
             lds_sigma: Sigma parameter for LDS kernel.
             
         Returns:
-            List of weights for each sample or None if no reweighting.
+            Numpy array of weights for each sample or None if reweight is 'none'.
         """
         assert reweight in {'none', 'inverse', 'sqrt_inv'}
         assert reweight != 'none' if lds else True, \
             "Set reweight to 'sqrt_inv' (default) or 'inverse' when using LDS"
 
-        if len(self.y) == 0:
-            return None
-
-        # Count samples per label value (assuming integer/binnable labels)
-        value_dict = {x: 0 for x in range(max_target)}
-        for label in self.y:
-            # Cap label at max_target - 1 for counting
-            value_dict[min(max_target - 1, int(label))] += 1
-            
-        # Apply reweighting transformation
-        if reweight == 'sqrt_inv':
-            # Square root of inverse frequency
-            value_dict = {k: np.sqrt(v) if v > 0 else 0 for k, v in value_dict.items()} # Avoid sqrt(0) -> NaN
-        elif reweight == 'inverse':
-            # Inverse frequency with clipping to prevent extreme weights
-            value_dict = {k: np.clip(v, 5, 1000) for k, v in value_dict.items()}
-            
-        # Get count for each sample's label
-        num_per_label = [value_dict[min(max_target - 1, int(label))] for label in self.y]
-        
-        # Return None if no reweighting is selected
         if reweight == 'none':
             return None
-            
+
+        if len(self.y) == 0:
+            return np.array([], dtype=np.float32)
+
         print(f"Using re-weighting: [{reweight.upper()}]")
 
-        # Apply Label Distribution Smoothing if enabled
-        if lds:
-            lds_kernel_window = get_lds_kernel_window(lds_kernel, lds_ks, lds_sigma)
-            print(f'Using LDS: [{lds_kernel.upper()}] ({lds_ks}/{lds_sigma})')
-            
-            # Extract counts in order
-            counts = np.asarray([value_dict[i] for i in range(max_target)])
-            
-            # Smooth the label distribution with the kernel
-            smoothed_counts = convolve1d(counts, weights=lds_kernel_window, mode='constant')
-            
-            # Map smoothed counts back to each sample's label
-            num_per_label = [smoothed_counts[min(max_target - 1, int(label))] for label in self.y]
-
-        # Calculate inverse weights and scale them
-        # Add small epsilon to avoid division by zero if counts are zero after smoothing/reweighting
-        weights = [np.float32(1 / (x + 1e-9)) for x in num_per_label] 
-        scaling = len(weights) / np.sum(weights)  # Normalize to maintain same overall impact
-        weights = [scaling * x for x in weights]
+        # --- Binning Strategy ---
+        min_val = np.min(self.y)
+        max_val = np.max(self.y)
         
-        # Check for NaNs or Infs which might occur if num_per_label has zeros
+        if min_val == max_val:
+            # Handle case where all labels are the same
+            print("Warning: All labels have the same value. Weights will be uniform (1.0).")
+            return np.ones(len(self.y), dtype=np.float32)
+
+        n_bins = bins if bins is not None and bins > 0 else DEFAULT_NUM_BINS
+        print(f"Using {n_bins} bins for label distribution analysis.")
+
+        # Use np.histogram to get counts per bin
+        counts, bin_edges = np.histogram(self.y, bins=n_bins, range=(min_val, max_val))
+        
+        # --- Label Distribution Smoothing (LDS) ---
+        effective_counts = counts.astype(float) # Use float for potential smoothing
+        if lds:
+            if lds_ks % 2 == 0:
+                 print(f"Warning: LDS kernel size (lds_ks={lds_ks}) should be odd. Using {lds_ks+1}.")
+                 lds_ks += 1
+            lds_kernel_window = get_lds_kernel_window(lds_kernel, lds_ks, lds_sigma)
+            print(f'Applying LDS: [{lds_kernel.upper()}] ({lds_ks}/{lds_sigma})')
+            
+            # Smooth the bin counts
+            effective_counts = convolve1d(counts, weights=lds_kernel_window, mode='constant')
+            # Ensure non-negative counts after smoothing
+            effective_counts = np.maximum(effective_counts, 0) 
+
+        # --- Map Bins Back to Samples ---
+        # Find the bin index for each label. +1e-9 to handle labels exactly at max_val edge
+        bin_indices = np.digitize(self.y + 1e-9 * (max_val-min_val), bins=bin_edges)
+        # np.digitize returns 1-based indices, adjust to 0-based and clip
+        bin_indices = np.clip(bin_indices - 1, 0, n_bins - 1) 
+        
+        # Get the effective count corresponding to each sample's bin
+        num_per_label = effective_counts[bin_indices]
+
+        # --- Apply Reweighting Transformation ---
+        if reweight == 'sqrt_inv':
+            # Avoid division by zero or sqrt(0)
+            num_per_label_transformed = np.sqrt(np.maximum(num_per_label, 1e-9)) 
+        elif reweight == 'inverse':
+            # Clipping applied during weight calculation below
+            num_per_label_transformed = num_per_label
+        else: # Should not happen due to assert, but for safety
+            num_per_label_transformed = num_per_label
+
+        # --- Calculate Weights ---
+        if reweight == 'inverse':
+             # Apply clipping here for the 'inverse' strategy
+             clipped_counts = np.clip(num_per_label_transformed, 5, 1000)
+             weights = 1.0 / (clipped_counts + 1e-9)
+        else: # For 'sqrt_inv' (or if somehow 'none' got here)
+             weights = 1.0 / (num_per_label_transformed + 1e-9)
+             
+        weights = weights.astype(np.float32)
+
+        # --- Scale Weights ---
+        total_weight = np.sum(weights)
+        if total_weight > 0:
+            scaling = len(weights) / total_weight
+            weights = weights * scaling
+        else:
+             print("Warning: Sum of weights is zero. Setting weights to 1.0.")
+             weights = np.ones(len(self.y), dtype=np.float32)
+             
+        # Check for NaNs or Infs
         if np.isnan(weights).any() or np.isinf(weights).any():
-             print("Warning: NaNs or Infs detected in weights. Check label distribution and reweighting/LDS settings.")
-             # Replace NaNs/Infs with a default weight (e.g., 1.0) or handle as needed
-             weights = [w if np.isfinite(w) else 1.0 for w in weights]
+             num_invalid = np.sum(np.isnan(weights) | np.isinf(weights))
+             print(f"Warning: {num_invalid} NaNs or Infs detected in weights. Replacing with 1.0.")
+             weights = np.where(np.isfinite(weights), weights, 1.0)
              # Optional: Recalculate scaling if NaNs/Infs were replaced
-             # scaling = len(weights) / np.sum(weights)
-             # weights = [scaling * x for x in weights]
+             total_weight = np.sum(weights)
+             if total_weight > 0:
+                 scaling = len(weights) / total_weight
+                 weights = weights * scaling
+             else:
+                  weights = np.ones(len(self.y), dtype=np.float32) # Fallback
 
         return weights
 
     def get_bucket_info(self, 
-                        max_target: Optional[int] = None, 
+                        bins: Optional[int] = None, # Changed from max_target
                         lds: bool = False, 
                         lds_kernel: str = 'gaussian', 
                         lds_ks: int = 5, 
                         lds_sigma: float = 2) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Get information about label distribution buckets.
+        Get information about label distribution buckets using histogram binning.
         
         Args:
-            max_target: Maximum target value to consider. If None, inferred from data.
+            bins: Number of bins for histogramming the label distribution. If None, uses self.bins or default.
             lds: Whether to use Label Distribution Smoothing.
             lds_kernel: Kernel type for LDS.
             lds_ks: Kernel size for LDS.
@@ -193,37 +224,54 @@ class TabDS(data.Dataset):
         Returns:
             Tuple containing (bucket_centers, bucket_weights). Bucket weights are normalized.
         """
-        if max_target is None:
-             max_target = int(np.max(self.y)) + 1 if len(self.y) > 0 else 1
+        if len(self.y) == 0:
+            return np.array([]), np.array([])
 
-        # Count samples per label value
-        value_dict = {x: 0 for x in range(max_target)}
-        for label in self.y:
-             # Only count labels within the specified range
-            if int(label) < max_target:
-                value_dict[int(label)] += 1
-                
-        # Extract centers (label values) and weights (counts)
-        bucket_centers = np.asarray(list(value_dict.keys()))
-        bucket_weights = np.asarray(list(value_dict.values()))
+        # --- Binning Strategy ---
+        min_val = np.min(self.y)
+        max_val = np.max(self.y)
         
+        if min_val == max_val:
+            print("Warning: All labels have the same value in get_bucket_info.")
+            # Return a single bucket centered at the value with weight 1.0
+            return np.array([min_val]), np.array([1.0])
+
+        # Determine number of bins (use provided bins, instance bins, or default)
+        n_bins = bins if bins is not None and bins > 0 \
+                 else self.bins if self.bins is not None and self.bins > 0 \
+                 else DEFAULT_NUM_BINS
+
+        # Use np.histogram to get counts per bin
+        counts, bin_edges = np.histogram(self.y, bins=n_bins, range=(min_val, max_val))
+        
+        # Calculate bucket centers (midpoint of each bin)
+        bucket_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+        bucket_weights = counts.astype(float) # Use float for potential smoothing
+
         # Apply Label Distribution Smoothing if enabled
         if lds:
+            if lds_ks % 2 == 0:
+                 print(f"Warning: LDS kernel size (lds_ks={lds_ks}) should be odd. Using {lds_ks+1}.")
+                 lds_ks += 1
             lds_kernel_window = get_lds_kernel_window(lds_kernel, lds_ks, lds_sigma)
-            print(f'Using LDS: [{lds_kernel.upper()}] ({lds_ks}/{lds_sigma})')
+            print(f'Applying LDS to bucket info: [{lds_kernel.upper()}] ({lds_ks}/{lds_sigma})')
             bucket_weights = convolve1d(bucket_weights, weights=lds_kernel_window, mode='constant')
+            # Ensure non-negative weights after smoothing
+            bucket_weights = np.maximum(bucket_weights, 0) 
 
-        # Filter out buckets with zero weight (important after potential smoothing)
-        non_zero_indices = np.where(bucket_weights > 1e-9)[0] # Use epsilon for floating point comparison
+        # Filter out buckets with effectively zero weight
+        non_zero_indices = np.where(bucket_weights > 1e-9)[0] 
         bucket_centers = bucket_centers[non_zero_indices]
         bucket_weights = bucket_weights[non_zero_indices]
         
         # Normalize weights to sum to 1
-        if bucket_weights.sum() > 0:
-             bucket_weights = bucket_weights / bucket_weights.sum()
-        else:
-             print("Warning: Sum of bucket weights is zero in get_bucket_info.")
-             # Handle case with no data or all weights becoming zero
+        total_weight = bucket_weights.sum()
+        if total_weight > 0:
+             bucket_weights = bucket_weights / total_weight
+        elif len(bucket_weights) > 0: # If all weights became zero after filtering/smoothing
+             print("Warning: Sum of bucket weights is zero in get_bucket_info. Setting uniform weights.")
+             bucket_weights = np.ones_like(bucket_weights) / len(bucket_weights)
+        # else: # No non-zero buckets remain, return empty arrays
 
         return bucket_centers, bucket_weights
 
@@ -380,7 +428,7 @@ def build_ed_ds(
         apply_log: bool = True,
         inputs_to_use: Optional[List[str]] = None,
         outputs_to_use: Optional[List[str]] = None,
-        cme_speed_threshold: float = -1,
+        cme_speed_threshold: float = 0,
         seed: int = 42
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
@@ -504,7 +552,7 @@ def load_file_data(
     logI = data['Proton Intensity'].values
 
     # Get delta log intensity target
-    y = target_data.values
+    y = target_data.values.flatten()  # Flatten to ensure shape is (n_samples,) instead of (n_samples, 1)
 
     if cme_speed_threshold > -1:
         # Process and append CME features
@@ -512,7 +560,8 @@ def load_file_data(
         combined_input = pd.concat([input_data_normalized, cme_features], axis=1)
         X = combined_input.values
     else:
-        X = input_data_normalized.values.reshape((input_data_normalized.shape[0], -1, 1))
+        # X = input_data_normalized.values.reshape((input_data_normalized.shape[0], -1, 1))
+        X = input_data_normalized.values
 
     # Return processed X, y, logI and logI_prev
     return X, y, logI, logI_prev
