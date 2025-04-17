@@ -17,9 +17,6 @@ WEIGHT_DECAY=0.1 # From WEIGHT_DECAY
 # BMSE / GAI specific settings
 GMM_FILE="C:/Users/the_3/Documents/github/BalancedMSE/neurips2025/checkpoint/asc_gmm_K8.pkl" # Placeholder - replace with actual path/name if needed
 
-# Use balanced metrics for evaluation/model selection
-BALANCED_METRIC="--balanced_metric"
-
 # Lower and upper thresholds for label range categorization
 LOWER_THRESHOLD=2.30102999566
 UPPER_THRESHOLD=4.30102999566
@@ -42,7 +39,6 @@ python train.py \
     --init_noise_sigma ${INIT_NOISE_SIGMA} \
     --gmm_file ${GMM_FILE} \
     --sigma_lr ${SIGMA_LR} \
-    ${BALANCED_METRIC} \
     --gpu 0 # Uncomment and set GPU ID if needed
     # --schedule 60 80 # Uncomment to use default LR schedule
     # Add other arguments from train.py if needed

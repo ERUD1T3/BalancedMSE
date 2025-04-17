@@ -54,7 +54,6 @@ parser.add_argument('--imp', type=str, default='gai', choices=['gai', 'bmc', 'bn
 parser.add_argument('--gmm_file', type=str, default=None, help='Path to preprocessed GMM file (e.g., sep_gmm_K8.pkl). If None, constructed from dataset/K.')
 parser.add_argument('--init_noise_sigma', type=float, default=1., help='initial scale of the noise')
 parser.add_argument('--sigma_lr', type=float, default=1e-2, help='learning rate of the noise scale')
-parser.add_argument('--balanced_metric', action='store_true', default=False, help='use balanced metric')
 parser.add_argument('--fix_noise_sigma', action='store_true', default=False, help='disable joint optimization')
 
 # Re-weighting: SQRT_INV / INV
@@ -132,8 +131,6 @@ if args.bmse:
     if args.fix_noise_sigma:
         args.store_name += '_fixNoise'
 args.store_name = f"{args.dataset}_{args.model}{args.store_name}_{args.optimizer}_{args.loss}_lr{args.lr}_bs{args.batch_size}_wd{args.weight_decay}_epoch{args.epoch}"
-if args.balanced_metric:
-    args.store_name += '_balMetric'
 
 # Create folders for storing results
 prepare_folders(args)
