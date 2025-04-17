@@ -228,7 +228,14 @@ def preprocess_gmm() -> None:
     # Ensure the directory exists if store_root and store_name are used
     save_dir = os.path.join(args.store_root, args.store_name) if args.store_name else args.store_root
     os.makedirs(save_dir, exist_ok=True)
-    full_gmm_path = os.path.join(save_dir, args.gmm_save_path)
+    
+    # Update GMM filename to include dataset information
+    gmm_filename = f"{args.dataset}_gmm_K{args.K}.pkl"
+    if args.gmm_save_path != 'gmm_params.pkl':  # If user provided a custom name, preserve it but add dataset info
+        base_name, ext = os.path.splitext(args.gmm_save_path)
+        gmm_filename = f"{base_name}_{args.dataset}_K{args.K}{ext}"
+    
+    full_gmm_path = os.path.join(save_dir, gmm_filename)
 
     joblib.dump(gmm_dict, full_gmm_path)
     

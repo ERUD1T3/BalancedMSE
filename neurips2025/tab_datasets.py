@@ -2,6 +2,7 @@ import logging
 from typing import List, Optional, Tuple, Union
 import numpy as np
 from scipy.ndimage import convolve1d
+from sklearn.utils import shuffle
 import torch
 from torch.utils import data
 import pandas as pd
