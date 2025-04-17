@@ -71,7 +71,7 @@ parser.add_argument('--loss', type=str, default='l1', choices=['mse', 'l1', 'foc
 parser.add_argument('--lr', type=float, default=1e-3, help='initial learning rate')
 parser.add_argument('--epoch', type=int, default=90, help='number of epochs to train')
 parser.add_argument('--momentum', type=float, default=0.9, help='optimizer momentum')
-parser.add_argument('--weight_decay', type=float, default=1e-4, help='optimizer weight decay')
+parser.add_argument('--weight_decay', type=float, default=1e-2, help='optimizer weight decay')
 parser.add_argument('--schedule', type=int, nargs='*', default=[60, 80], help='lr schedule (when to drop lr by 10x)')
 parser.add_argument('--batch_size', type=int, default=256, help='batch size')
 parser.add_argument('--print_freq', type=int, default=10, help='logging frequency')

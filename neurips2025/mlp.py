@@ -9,7 +9,7 @@ class MLP(nn.Module):
     """
     A PyTorch MLP that:
       - Supports skip connections every 'skipped_layers' blocks
-      - Optionally applies batch_norm or layer_norm
+      - Applies batch normalization
       - Optionally applies dropout
       - Always produces a linear output for regression
       - Optionally applies FDS smoothing to the final representation
@@ -24,10 +24,8 @@ class MLP(nn.Module):
         embed_dim: int = 128,
         skip_repr: bool = True,
         activation: nn.Module | None = None,
-        norm: str = 'batch_norm',
         dropout: float = 0.2,
         name: str = 'mlp',
-        weight_decay: float = 0.0,
         fds: bool = False,
         bucket_num: int = 50,
         bucket_start: int = 0,
@@ -39,7 +37,7 @@ class MLP(nn.Module):
         momentum: float = 0.9
     ) -> None:
         """
-        Creates an MLP with optional skip connections, normalization, dropout, and FDS smoothing.
+        Creates an MLP with optional skip connections, batch normalization, dropout, and FDS smoothing.
 
         Args:
             input_dim (int): Number of input features.
@@ -49,10 +47,8 @@ class MLP(nn.Module):
             embed_dim (int): Size of the final embedding layer.
             skip_repr (bool): If True, merges a skip into the final embedding block.
             activation (nn.Module): Activation function to use, defaults to LeakyReLU if None.
-            norm (str): Either 'batch_norm' or 'layer_norm' for hidden layers.
             dropout (float): Dropout probability. No dropout if 0.
             name (str): Name of the model (not used internally, just for reference).
-            weight_decay (float): L2 regularization factor (set in your optimizer if needed).
             fds (bool): If True, enables FDS smoothing on the final representation.
             bucket_num, bucket_start, start_update, start_smooth, kernel, ks, sigma, momentum:
                 Parameters for FDS if enabled.
@@ -72,10 +68,8 @@ class MLP(nn.Module):
         self.skipped_layers = skipped_layers
         self.embed_dim = embed_dim
         self.skip_repr = skip_repr
-        self.norm_type = norm
         self.dropout_rate = dropout
         self.name = name
-        self.weight_decay = weight_decay
         self.activation_fn = activation if (activation is not None) else nn.LeakyReLU()
 
         # Set up FDS if requested
@@ -102,23 +96,20 @@ class MLP(nn.Module):
         # 1) First block
         block0 = []
         block0.append(nn.Linear(input_dim, hiddens[0], bias=True))
-        if self.norm_type == 'batch_norm':
-            block0.append(nn.BatchNorm1d(hiddens[0]))
+        block0.append(nn.BatchNorm1d(hiddens[0]))
         self.layers.append(nn.Sequential(*block0))
 
         # 2) Additional hidden blocks
         for idx, units in enumerate(hiddens[1:], start=1):
             block = []
             block.append(nn.Linear(hiddens[idx - 1], units, bias=True))
-            if self.norm_type == 'batch_norm':
-                block.append(nn.BatchNorm1d(units))
+            block.append(nn.BatchNorm1d(units))
             self.layers.append(nn.Sequential(*block))
 
         # 3) Final embedding block
         final_block = []
         final_block.append(nn.Linear(hiddens[-1], embed_dim, bias=True))
-        if self.norm_type == 'batch_norm':
-            final_block.append(nn.BatchNorm1d(embed_dim))
+        final_block.append(nn.BatchNorm1d(embed_dim))
         self.final_embed = nn.Sequential(*final_block)
 
         # 4) Output layer (always linear)
@@ -149,7 +140,7 @@ class MLP(nn.Module):
                 final_repr
         """
         # First hidden block
-        out = self.layers[0](x)       # linear (+ BN if present)
+        out = self.layers[0](x)       # linear + BN
         out = self.activation_fn(out) # activation
 
         # Possibly skip from input
@@ -158,20 +149,16 @@ class MLP(nn.Module):
                 # For dimension mismatch, define a small projection or do partial slice
                 # Here, we do a direct linear for clarity:
                 projection = nn.Linear(x.shape[1], out.shape[1], bias=False).to(x.device)
-                with torch.no_grad():
-                    # Initialize or you can do something more advanced
-                    projection.weight.fill_(0.0)
                 skip_out = projection(x)
             else:
                 skip_out = x
 
             out = out + skip_out
-            if self.norm_type == 'layer_norm':
-                out = F.layer_norm(out, out.shape[1:])
+            # Apply dropout *after* first skip connection + activation
             if self.dropout_module is not None:
                 out = self.dropout_module(out)
         else:
-            # If no skip, just dropout
+            # If no skip, just dropout after activation
             if self.dropout_module is not None:
                 out = self.dropout_module(out)
 
@@ -184,59 +171,65 @@ class MLP(nn.Module):
 
             if self.skipped_layers > 0 and idx % self.skipped_layers == 0:
                 if out.shape[1] != residual.shape[1]:
+                    # Keep the original dynamic projection method
                     projection = nn.Linear(residual.shape[1], out.shape[1], bias=False).to(x.device)
-                    with torch.no_grad():
-                        projection.weight.fill_(0.0)
                     skip_out = projection(residual)
                 else:
                     skip_out = residual
 
                 out = out + skip_out
-                if self.norm_type == 'layer_norm':
-                    out = F.layer_norm(out, out.shape[1:])
+                # Apply dropout *after* skip connection + activation
                 if self.dropout_module is not None:
                     out = self.dropout_module(out)
-                residual = out
+                residual = out # Update residual state *after* dropout
             else:
+                # If no skip, just dropout after activation
                 if self.dropout_module is not None:
                     out = self.dropout_module(out)
+                # Note: residual does not update here if no skip
 
         # Final embedding block
-        out = self.final_embed(out)
+        out = self.final_embed(out) # linear + BN
 
-        final_repr = out
-        # If skip_repr=True, we do a skip from residual to final_repr
-        if self.skip_repr and self.skipped_layers > 0:
-            if final_repr.shape[1] != residual.shape[1]:
-                projection = nn.Linear(residual.shape[1], final_repr.shape[1], bias=False).to(x.device)
-                with torch.no_grad():
-                    projection.weight.fill_(0.0)
-                skip_out = projection(residual)
+        # --- Activation and Dropout Placement Logic Changed ---
+        if self.skip_repr:
+            # Apply activation *before* potential skip connection addition
+            activated_out = self.activation_fn(out)
+
+            if self.skipped_layers > 0:
+                # Prepare skip connection from the last residual state
+                if out.shape[1] != residual.shape[1]: # Compare shape *before* activation
+                    projection = nn.Linear(residual.shape[1], out.shape[1], bias=False).to(x.device)
+                    skip_out = projection(residual)
+                else:
+                    skip_out = residual
+
+                # Apply dropout to the activated output *before* adding the skip
+                if self.dropout_module is not None:
+                    activated_out = self.dropout_module(activated_out)
+
+                # Add skip connection to the *activated* output
+                final_repr = activated_out + skip_out
+                # NO activation after the add
             else:
-                skip_out = residual
-
-            if self.dropout_module is not None:
-                final_repr = self.dropout_module(final_repr)
-
-            final_repr = final_repr + skip_out
-            if self.norm_type == 'layer_norm':
-                final_repr = F.layer_norm(final_repr, final_repr.shape[1:])
-            # Activation after skip
-            final_repr = self.activation_fn(final_repr)
+                # Case: skip_repr is True, but no skip connection (skipped_layers=0)
+                # Apply dropout if needed to the activated output
+                if self.dropout_module is not None:
+                    activated_out = self.dropout_module(activated_out)
+                # Final repr is just the activated output (potentially dropout-applied)
+                final_repr = activated_out
         else:
-            # If no skip_repr or no skip, just dropout + optional layer_norm
+            # Case: skip_repr is False. Representation is pre-activation.
+            # Apply dropout if needed to the output of final_embed
             if self.dropout_module is not None:
-                final_repr = self.dropout_module(final_repr)
-            if self.norm_type == 'layer_norm':
-                final_repr = F.layer_norm(final_repr, final_repr.shape[1:])
-            # Activation if skip_repr is True but no skip connection
-            if self.skip_repr:
-                final_repr = self.activation_fn(final_repr)
+                out = self.dropout_module(out)
+            final_repr = out # No activation applied here when skip_repr is False
 
         # Apply FDS smoothing if conditions are met
         if self.fds_enabled and self.training and epoch is not None and epoch >= self.start_smooth:
             if labels is None:
                 raise ValueError("Labels must be provided for FDS smoothing.")
+            # Apply FDS to the final representation *after* activation/addition logic
             final_repr = self.fds_module.smooth(final_repr, labels, epoch)
 
         # Output layer (always linear for regression)
@@ -255,10 +248,8 @@ def create_mlp(
     embed_dim: int = 128,
     skip_repr: bool = True,
     activation: nn.Module | None = None,
-    norm: str = 'batch_norm',
     dropout: float = 0.2,
     name: str = 'mlp',
-    weight_decay: float = 0.0,
     fds: bool = False,
     bucket_num: int = 50,
     bucket_start: int = 0,
@@ -271,7 +262,7 @@ def create_mlp(
 ) -> MLP:
     """
     Creates an MLP instance for regression, supporting optional skip connections,
-    normalization, dropout, and FDS smoothing.
+    batch normalization, dropout, and FDS smoothing.
 
     Args:
         input_dim (int): Number of input features.
@@ -281,10 +272,8 @@ def create_mlp(
         embed_dim (int): Size of the final embedding.
         skip_repr (bool): If True, merges skip into the final embedding block.
         activation (nn.Module): Activation function, defaults to LeakyReLU if None.
-        norm (str): 'batch_norm' or 'layer_norm' for hidden layers.
         dropout (float): Dropout probability.
         name (str): Model name, unused in PyTorch but kept for reference.
-        weight_decay (float): L2 regularization factor (applied in optimizer).
         fds (bool): If True, enable FDS smoothing.
         bucket_num, bucket_start, start_update, start_smooth, kernel, ks, sigma, momentum:
             Hyperparameters for FDS.
@@ -300,10 +289,8 @@ def create_mlp(
         embed_dim=embed_dim,
         skip_repr=skip_repr,
         activation=activation,
-        norm=norm,
         dropout=dropout,
         name=name,
-        weight_decay=weight_decay,
         fds=fds,
         bucket_num=bucket_num,
         bucket_start=bucket_start,
