@@ -5,6 +5,96 @@ from sklearn.metrics import mean_absolute_error
 from typing import Optional
 
 
+
+# Add this import at the top with the other imports
+import os
+import csv
+import datetime
+
+# Add this function after the threshold_metrics function
+def save_results_to_csv(args, metrics_dict: dict, standard_metrics: tuple) -> str:
+    """
+    Save the experiment results to a CSV file.
+    
+    Args:
+        args: Command line arguments containing experiment configuration
+        metrics_dict: Dictionary of specialized metrics with format {metric_name: (mean, std)}
+        standard_metrics: Tuple of (mse_mean, mse_std, l1_mean, l1_std, gmean_mean, gmean_std)
+        
+    Returns:
+        str: Path to the saved CSV file
+    """
+    # Create a timestamp for unique filename
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Build a descriptive filename
+    filename = f"{args.dataset}"
+    
+    # Add method information
+    if args.bmse:
+        filename += f"_bmse-{args.imp}"
+    if args.lds:
+        filename += "_lds"
+    if args.fds:
+        filename += "_fds"
+    if args.reweight != 'none':
+        filename += f"_{args.reweight}"
+    
+    # Add loss function and other key parameters
+    filename += f"_{args.loss}"
+    filename += f"_e{args.epoch}"
+    
+    # Add timestamp and extension
+    filename += f"_{timestamp}.csv"
+    
+    # Full path in the experiment directory
+    filepath = os.path.join(args.store_root, f"{args.dataset}_{args.model}", filename)
+    
+    # Ensure directory exists
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    
+    # Write to CSV
+    with open(filepath, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        
+        # Write header with experiment details
+        writer.writerow(["Experiment Summary"])
+        writer.writerow(["Dataset", args.dataset])
+        writer.writerow(["Model", args.model])
+        writer.writerow(["BMSE", str(args.bmse)])
+        if args.bmse:
+            writer.writerow(["BMSE Implementation", args.imp])
+        writer.writerow(["LDS", str(args.lds)])
+        writer.writerow(["FDS", str(args.fds)])
+        writer.writerow(["Reweighting", args.reweight])
+        writer.writerow(["Loss Function", args.loss])
+        writer.writerow(["Epochs", args.epoch])
+        writer.writerow(["Learning Rate", args.lr])
+        writer.writerow(["Batch Size", args.batch_size])
+        writer.writerow(["Weight Decay", args.weight_decay])
+        writer.writerow(["Number of Trials", len(args.seeds)])
+        writer.writerow(["Seeds", " ".join(map(str, args.seeds))])
+        writer.writerow([])
+        
+        # Write standard metrics
+        mse_mean, mse_std, l1_mean, l1_std, gmean_mean, gmean_std = standard_metrics
+        writer.writerow(["Standard Metrics"])
+        writer.writerow(["Metric", "Mean", "Std Dev"])
+        writer.writerow(["MSE", f"{mse_mean:.4f}", f"{mse_std:.4f}"])
+        writer.writerow(["L1", f"{l1_mean:.4f}", f"{l1_std:.4f}"])
+        writer.writerow(["G-Mean", f"{gmean_mean:.4f}", f"{gmean_std:.4f}"])
+        writer.writerow([])
+        
+        # Write specialized metrics
+        writer.writerow(["Specialized Metrics"])
+        writer.writerow(["Metric", "Mean", "Std Dev"])
+        for metric_name, (mean, std) in metrics_dict.items():
+            writer.writerow([metric_name, f"{mean:.4f}", f"{std:.4f}"])
+    
+    print(f"\nResults saved to: {filepath}")
+    return filepath
+
+
 def process_predictions(predictions: np.ndarray) -> np.ndarray:
     """
     Processes model predictions to ensure compatibility with models 

@@ -17,8 +17,11 @@ from neurips2025.tab_ds import TabDS, load_tabular_splits, set_seed
 from mlp import create_mlp
 from utils import *
 from balanaced_mse import *
-
-import os
+from metrics import (
+    evaluate_sep_metrics, evaluate_ed_metrics, evaluate_onp_metrics,
+    evaluate_sarcos_metrics, evaluate_bf_metrics, evaluate_asc_metrics,
+    save_results_to_csv
+)
 
 # Disable KMP warnings
 os.environ["KMP_WARNINGS"] = "FALSE"
@@ -260,7 +263,63 @@ def run_trial(trial_seed):
         model.load_state_dict(state_dict, strict=True)
         print(f"===> Checkpoint '{ckpt_path}' loaded (epoch [{checkpoint['epoch']}]), testing...")
         validate(test_loader, model, prefix='Test')
-        return
+
+        # Evaluate dataset-specific metrics
+        print("\nEvaluating specialized metrics...")
+        if args.gpu is not None:
+            device = torch.device(f'cuda:{args.gpu}')
+        else:
+            device = torch.device('cpu')
+        
+        # Use appropriate metrics function based on dataset
+        if args.dataset == 'sep':
+            metrics = evaluate_sep_metrics(
+                model, X_train, y_train, X_test, y_test, 
+                sep_threshold=np.log(10), device=device
+            )
+        elif args.dataset == 'ed':
+            metrics = evaluate_ed_metrics(
+                model, X_train, y_train, X_test, y_test,
+                mae_plus_threshold=0.5, device=device
+            )
+        elif args.dataset == 'onp':
+            metrics = evaluate_onp_metrics(
+                model, X_train, y_train, X_test, y_test, 
+                rare_low_threshold=np.log10(350),
+                rare_high_threshold=np.log10(35000),
+                device=device
+            )
+        elif args.dataset == 'sarcos':
+            metrics = evaluate_sarcos_metrics(
+                model, X_train, y_train, X_test, y_test,
+                lower_threshold=-0.5, upper_threshold=0.5,
+                device=device
+            )
+        elif args.dataset == 'bf':
+            metrics = evaluate_bf_metrics(
+                model, X_train, y_train, X_test, y_test,
+                freq_threshold=np.log10(4), rare_threshold=np.log10(40),
+                device=device
+            )
+        elif args.dataset == 'asc':
+            metrics = evaluate_asc_metrics(
+                model, X_train, y_train, X_test, y_test,
+                rare_low_threshold=np.log10(200),
+                rare_high_threshold=np.log10(20000),
+                device=device
+            )
+        
+        # Print metrics in a formatted way
+        print("\n===== Specialized Metrics =====")
+        for metric_name, value in metrics.items():
+            print(f"{metric_name}: {value:.4f}")
+        
+        # Log metrics to tensorboard
+        for metric_name, value in metrics.items():
+            trial_logger.log_value(f'test/{metric_name}', value, 0)
+        
+        # Incorporate specialized metrics in the return values
+        return test_loss_mse, test_loss_l1, test_loss_gmean, metrics
 
     # For retraining only the final layer (transfer learning)
     if args.retrain_regressor:
@@ -414,7 +473,62 @@ def run_trial(trial_seed):
     
     print(f"Test Results: MSE [{test_loss_mse:.4f}], L1 [{test_loss_l1:.4f}], G-Mean [{test_loss_gmean:.4f}]\nDone")
 
-    return test_loss_mse, test_loss_l1, test_loss_gmean
+    # Evaluate dataset-specific metrics
+    print("\nEvaluating specialized metrics...")
+    if args.gpu is not None:
+        device = torch.device(f'cuda:{args.gpu}')
+    else:
+        device = torch.device('cpu')
+    
+    # Use appropriate metrics function based on dataset
+    if args.dataset == 'sep':
+        metrics = evaluate_sep_metrics(
+            model, X_train, y_train, X_test, y_test, 
+            sep_threshold=np.log(10), device=device
+        )
+    elif args.dataset == 'ed':
+        metrics = evaluate_ed_metrics(
+            model, X_train, y_train, X_test, y_test,
+            mae_plus_threshold=0.5, device=device
+        )
+    elif args.dataset == 'onp':
+        metrics = evaluate_onp_metrics(
+            model, X_train, y_train, X_test, y_test, 
+            rare_low_threshold=np.log10(350),
+            rare_high_threshold=np.log10(35000),
+            device=device
+        )
+    elif args.dataset == 'sarcos':
+        metrics = evaluate_sarcos_metrics(
+            model, X_train, y_train, X_test, y_test,
+            lower_threshold=-0.5, upper_threshold=0.5,
+            device=device
+        )
+    elif args.dataset == 'bf':
+        metrics = evaluate_bf_metrics(
+            model, X_train, y_train, X_test, y_test,
+            freq_threshold=np.log10(4), rare_threshold=np.log10(40),
+            device=device
+        )
+    elif args.dataset == 'asc':
+        metrics = evaluate_asc_metrics(
+            model, X_train, y_train, X_test, y_test,
+            rare_low_threshold=np.log10(200),
+            rare_high_threshold=np.log10(20000),
+            device=device
+        )
+    
+    # Print metrics in a formatted way
+    print("\n===== Specialized Metrics =====")
+    for metric_name, value in metrics.items():
+        print(f"{metric_name}: {value:.4f}")
+    
+    # Log metrics to tensorboard
+    for metric_name, value in metrics.items():
+        trial_logger.log_value(f'test/{metric_name}', value, 0)
+    
+    # Incorporate specialized metrics in the return values
+    return test_loss_mse, test_loss_l1, test_loss_gmean, metrics
 
 def main():
     """
@@ -443,9 +557,17 @@ def main():
         args.store_name = original_store_name
         
         # Run the trial
-        trial_metrics = run_trial(seed)
-        if trial_metrics:
-            all_test_metrics.append(trial_metrics)
+        trial_results = run_trial(seed)
+        if trial_results:
+            test_mse, test_l1, test_gmean, specialized_metrics = trial_results
+            all_test_metrics.append((test_mse, test_l1, test_gmean))
+            
+            # Track specialized metrics across trials
+            if trial_idx == 0:
+                all_specialized_metrics = {k: [] for k in specialized_metrics.keys()}
+            
+            for k, v in specialized_metrics.items():
+                all_specialized_metrics[k].append(v)
     
     # Print summary of all trials if we have results
     if all_test_metrics:
@@ -458,10 +580,30 @@ def main():
         l1_values = [m[1] for m in all_test_metrics]
         gmean_values = [m[2] for m in all_test_metrics]
         
-        print(f"Test MSE: {np.mean(mse_values):.4f} ± {np.std(mse_values):.4f}")
-        print(f"Test L1: {np.mean(l1_values):.4f} ± {np.std(l1_values):.4f}")
-        print(f"Test G-Mean: {np.mean(gmean_values):.4f} ± {np.std(gmean_values):.4f}")
+        mse_mean, mse_std = np.mean(mse_values), np.std(mse_values)
+        l1_mean, l1_std = np.mean(l1_values), np.std(l1_values)
+        gmean_mean, gmean_std = np.mean(gmean_values), np.std(gmean_values)
+        
+        print(f"Test MSE: {mse_mean:.4f} ± {mse_std:.4f}")
+        print(f"Test L1: {l1_mean:.4f} ± {l1_std:.4f}")
+        print(f"Test G-Mean: {gmean_mean:.4f} ± {gmean_std:.4f}")
 
+        # After reporting MSE, L1, and G-Mean
+        print("\n----- Specialized Metrics -----")
+        specialized_metrics_dict = {}
+        for metric_name, values in all_specialized_metrics.items():
+            mean_val = np.mean(values)
+            std_val = np.std(values)
+            specialized_metrics_dict[metric_name] = (mean_val, std_val)
+            print(f"{metric_name}: {mean_val:.4f} ± {std_val:.4f}")
+        
+        # Save results to CSV
+        standard_metrics = (mse_mean, mse_std, l1_mean, l1_std, gmean_mean, gmean_std)
+        csv_path = save_results_to_csv(args, specialized_metrics_dict, standard_metrics)
+        print(f"Complete benchmark results saved to: {csv_path}")
+
+
+        
 def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Optimizer, epoch: int, criterion: nn.Module) -> float:
     """
     Train the model for one epoch.
