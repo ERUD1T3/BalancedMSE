@@ -832,11 +832,11 @@ def build_asc_ds(file_path: str, shuffle_data: bool = False, random_state: int =
 def load_tabular_splits(
     dataset_name: str,
     data_dir: str,
-    train_split_name: str = "subtraining",
+    train_split_name: str = "training",
     val_split_name: str = "validation",
     test_split_name: str = "testing",
     seed: int = 42,
-    use_fold: bool = True,
+    use_fold: bool = False,
     fold_dir: str = "fold0"
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """

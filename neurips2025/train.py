@@ -71,7 +71,7 @@ parser.add_argument('--dataset', type=str, required=True,
                     choices=['sep', 'sarcos', 'onp', 'bf', 'asc', 'ed'],
                     help='Name of the tabular dataset to use.')
 parser.add_argument('--data_dir', type=str, default='C:/Users/the_3/Documents/github/BalancedMSE/neurips2025/data', help='Root directory containing dataset subfolders.')
-parser.add_argument('--train_split_name', type=str, default='subtraining', help='Name for the training data file/folder.')
+parser.add_argument('--train_split_name', type=str, default='training', help='Name for the training data file/folder.')
 parser.add_argument('--val_split_name', type=str, default='validation', help='Name for the validation data file/folder.')
 parser.add_argument('--test_split_name', type=str, default='testing', help='Name for the test data file/folder.')
 
