@@ -832,10 +832,12 @@ def build_asc_ds(file_path: str, shuffle_data: bool = False, random_state: int =
 def load_tabular_splits(
     dataset_name: str,
     data_dir: str,
-    train_split_name: str,
-    val_split_name: str,
-    test_split_name: str,
-    seed: int
+    train_split_name: str = "subtraining",
+    val_split_name: str = "validation",
+    test_split_name: str = "testing",
+    seed: int = 42,
+    use_fold: bool = True,
+    fold_dir: str = "fold0"
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Loads train, validation, and test splits (X, y) for a specified tabular dataset.
@@ -846,10 +848,12 @@ def load_tabular_splits(
     Args:
         dataset_name (str): Name of the dataset (e.g., 'sep', 'ed', 'sarcos').
         data_dir (str): Root directory containing dataset subfolders.
-        train_split_name (str): Identifier for the training split (e.g., 'training').
+        train_split_name (str): Identifier for the training split (e.g., 'training', 'subtraining').
         val_split_name (str): Identifier for the validation split (e.g., 'validation').
         test_split_name (str): Identifier for the test split (e.g., 'test').
         seed (int): Random seed for shuffling (primarily affects training split).
+        use_fold (bool): Whether to use fold directory structure for train/validation data.
+        fold_dir (str): Name of the fold directory (e.g., 'fold0').
 
     Returns:
         Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -901,8 +905,12 @@ def load_tabular_splits(
 
         if dataset_name == 'ed':
             # Special handling for 'ed' dataset which expects a directory path
-            # Assumes structure: data_dir / dataset_folder / split_name /
-            data_path = os.path.join(data_dir, dataset_folder, split_name)
+            # For train and val, use fold directory if specified
+            if use_fold and split_key in ['train', 'val']:
+                data_path = os.path.join(data_dir, dataset_folder, fold_dir, split_name)
+            else:
+                data_path = os.path.join(data_dir, dataset_folder, split_name)
+                
             if not os.path.isdir(data_path):
                 raise FileNotFoundError(f"Data directory not found for '{dataset_name}' - '{split_key}' at: {data_path}")
 
@@ -923,7 +931,11 @@ def load_tabular_splits(
                  # This should not happen due to earlier checks, but as a safeguard:
                  raise ValueError(f"Filename pattern missing key for dataset '{dataset_name}'.")
 
-            data_path = os.path.join(data_dir, dataset_folder, file_name)
+            # For train and val, use fold directory if specified
+            if use_fold and split_key in ['train', 'val']:
+                data_path = os.path.join(data_dir, dataset_folder, fold_dir, file_name)
+            else:
+                data_path = os.path.join(data_dir, dataset_folder, file_name)
 
             if not os.path.exists(data_path):
                 raise FileNotFoundError(f"Data file not found for '{dataset_name}' - '{split_key}' at: {data_path}")
