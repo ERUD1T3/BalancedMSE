@@ -14,6 +14,7 @@ from tensorboard_logger import Logger
 
 from loss import *
 from tab_ds import TabDS, load_tabular_splits, set_seed
+from traceback import format_exc
 from mlp import create_mlp
 from utils import *
 from balanaced_mse import *
@@ -428,7 +429,7 @@ def run_trial(trial_seed):
         
         # Save checkpoint
         state_dict_to_save = model.state_dict()
-        save_checkpoint(args, {
+        enhanced_save_checkpoint(args, {
             'epoch': epoch + 1,
             'model': args.model,
             'best_loss': args.best_loss,
@@ -927,6 +928,34 @@ def threshold_metrics(
     
     return metrics_dict
 
+def enhanced_save_checkpoint(args, state, is_best, is_final=False):
+    """
+    Wrapper for save_checkpoint with essential error handling and logging
+    """
+    try:
+        # Create checkpoint directory if it doesn't exist
+        checkpoint_dir = os.path.join(args.store_root, args.store_name)
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        
+        # Save the checkpoint
+        filename = os.path.join(checkpoint_dir, 'ckpt.last.pth.tar')
+        torch.save(state, filename + '.tmp')
+        shutil.move(filename + '.tmp', filename)
+        logging.info(f"Checkpoint saved to: {filename}")
+        
+        if is_best:
+            best_filename = os.path.join(checkpoint_dir, 'ckpt.best.pth.tar')
+            shutil.copyfile(filename, best_filename + '.tmp')
+            shutil.move(best_filename + '.tmp', best_filename)
+            logging.info(f"Best checkpoint saved to: {best_filename}")
+        
+        if is_final:
+            final_filename = os.path.join(checkpoint_dir, 'ckpt.final.pth.tar')
+            shutil.copyfile(filename, final_filename)
+            logging.info(f"Final checkpoint saved to: {final_filename}")
+    
+    except Exception as e:
+        logging.error(f"Error saving checkpoint: {str(e)}")
 
 
 
