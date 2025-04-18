@@ -97,7 +97,7 @@ parser.add_argument('--workers', type=int, default=4, help='number of workers us
 # Checkpoints
 parser.add_argument('--resume', type=str, default='', help='checkpoint file path to resume training')
 parser.add_argument('--evaluate', action='store_true', help='evaluate only flag')
-parser.add_argument('--seed', type=int, default=42, help='random seed for reproducibility')
+parser.add_argument('--seeds', type=int, nargs='+', default=[456789], help='list of random seeds for multiple trials')
 
 args, unknown = parser.parse_known_args()
 
@@ -151,34 +151,37 @@ print(f"Store name: {args.store_name}")
 # Initialize TensorBoard logger
 tb_logger = Logger(logdir=os.path.join(args.store_root, args.store_name), flush_secs=2)
 
-
-
-
-def main() -> None:
+def run_trial(trial_seed):
     """
-    Main function to run the training/evaluation pipeline.
+    Run a single trial with the specified random seed.
     
-    This function handles:
-    1. Setting up the GPU
-    2. Loading and preparing datasets
-    3. Building the model
-    4. Setting up loss functions and optimizers
-    5. Training/evaluating the model
+    Args:
+        trial_seed: Random seed for this trial
     """
-    if args.gpu is not None:
-        if torch.cuda.is_available():
-            print(f"Use GPU: {args.gpu} for training")
-        else:
-            print("CUDA not available, using CPU.")
-            args.gpu = None
-
+    # Set seed for reproducibility
+    set_seed(trial_seed)
+    print(f"=== Starting trial with seed: {trial_seed} ===")
+    
+    # Update the store name to include the seed
+    original_store_name = args.store_name
+    args.store_name = f"{original_store_name}_seed{trial_seed}"
+    
+    # Create folders for this trial
+    prepare_folders(args)
+    
+    # Set up logging for this trial
+    trial_logger = Logger(logdir=os.path.join(args.store_root, args.store_name), flush_secs=2)
+    
+    # Reset best loss for this trial
+    args.best_loss = 1e5
+    
     # Data preparation
     print('=====> Preparing data...')
     start_time = time.time()
     try:
         X_train, y_train, X_val, y_val, X_test, y_test = load_tabular_splits(
             args.dataset, args.data_dir, args.train_split_name,
-            args.val_split_name, args.test_split_name, args.seed
+            args.val_split_name, args.test_split_name, trial_seed
         )
         print(f"Data loaded. Train: {X_train.shape}/{y_train.shape}, Val: {X_val.shape}/{y_val.shape}, Test: {X_test.shape}/{y_test.shape}")
         print(f'Data loading time: {time.time() - start_time:.2f} seconds')
@@ -236,7 +239,6 @@ def main() -> None:
         sigma=args.fds_sigma,
         momentum=args.fds_mmt
     )
-
 
     model = torch.nn.DataParallel(model).cuda() if args.gpu is not None else model.cpu()
 
@@ -382,15 +384,15 @@ def main() -> None:
               f"Val loss: MSE [{val_loss_mse:.4f}], L1 [{val_loss_l1:.4f}], G-Mean [{val_loss_gmean:.4f}]")
 
         # Log metrics to TensorBoard
-        tb_logger.log_value('train_loss', train_loss, epoch)
-        tb_logger.log_value('val/loss_mse', val_loss_mse, epoch)
-        tb_logger.log_value('val/loss_l1', val_loss_l1, epoch)
-        tb_logger.log_value('val/loss_gmean', val_loss_gmean, epoch)
+        trial_logger.log_value('train_loss', train_loss, epoch)
+        trial_logger.log_value('val/loss_mse', val_loss_mse, epoch)
+        trial_logger.log_value('val/loss_l1', val_loss_l1, epoch)
+        trial_logger.log_value('val/loss_gmean', val_loss_gmean, epoch)
         
         for i, param_group in enumerate(optimizer.param_groups):
-            tb_logger.log_value(f'lr/group_{i}', param_group['lr'], epoch)
+            trial_logger.log_value(f'lr/group_{i}', param_group['lr'], epoch)
         if args.bmse and not args.fix_noise_sigma and hasattr(criterion, 'noise_sigma'):
-            tb_logger.log_value('noise_sigma', criterion.noise_sigma.item(), epoch)
+            trial_logger.log_value('noise_sigma', criterion.noise_sigma.item(), epoch)
 
     # Test with best checkpoint after training
     print("=" * 120)
@@ -412,6 +414,53 @@ def main() -> None:
     
     print(f"Test Results: MSE [{test_loss_mse:.4f}], L1 [{test_loss_l1:.4f}], G-Mean [{test_loss_gmean:.4f}]\nDone")
 
+    return test_loss_mse, test_loss_l1, test_loss_gmean
+
+def main():
+    """
+    Run multiple trials with different seeds.
+    """
+    if args.gpu is not None:
+        if torch.cuda.is_available():
+            print(f"Use GPU: {args.gpu} for training")
+        else:
+            print("CUDA not available, using CPU.")
+            args.gpu = None
+    
+    # Store original store name before adding seed
+    original_store_name = args.store_name
+    
+    # Track metrics across all trials
+    all_test_metrics = []
+    
+    # Run each trial with a different seed
+    for trial_idx, seed in enumerate(args.seeds):
+        print(f"\n\n{'='*50}")
+        print(f"TRIAL {trial_idx+1}/{len(args.seeds)} - SEED {seed}")
+        print(f"{'='*50}\n")
+        
+        # Reset store name for each trial
+        args.store_name = original_store_name
+        
+        # Run the trial
+        trial_metrics = run_trial(seed)
+        if trial_metrics:
+            all_test_metrics.append(trial_metrics)
+    
+    # Print summary of all trials if we have results
+    if all_test_metrics:
+        print("\n\n" + "="*80)
+        print(f"SUMMARY OF {len(args.seeds)} TRIALS")
+        print("="*80)
+        
+        # Calculate mean and std of metrics across trials
+        mse_values = [m[0] for m in all_test_metrics]
+        l1_values = [m[1] for m in all_test_metrics]
+        gmean_values = [m[2] for m in all_test_metrics]
+        
+        print(f"Test MSE: {np.mean(mse_values):.4f} ± {np.std(mse_values):.4f}")
+        print(f"Test L1: {np.mean(l1_values):.4f} ± {np.std(l1_values):.4f}")
+        print(f"Test G-Mean: {np.mean(gmean_values):.4f} ± {np.std(gmean_values):.4f}")
 
 def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Optimizer, epoch: int, criterion: nn.Module) -> float:
     """
