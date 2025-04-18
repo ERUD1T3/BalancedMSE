@@ -70,7 +70,7 @@ parser.add_argument('--retrain_regressor', action='store_true', default=False,
 parser.add_argument('--dataset', type=str, required=True,
                     choices=['sep', 'sarcos', 'onp', 'bf', 'asc', 'ed'],
                     help='Name of the tabular dataset to use.')
-parser.add_argument('--data_dir', type=str, default='C:/Users/the_3/Documents/github/BalancedMSE/neurips2025/data', help='Root directory containing dataset subfolders.')
+parser.add_argument('--data_dir', type=str, default='/mnt/c/Users/the_3/Documents/github/BalancedMSE/neurips2025/data', help='Root directory containing dataset subfolders.')
 parser.add_argument('--train_split_name', type=str, default='training', help='Name for the training data file/folder.')
 parser.add_argument('--val_split_name', type=str, default='validation', help='Name for the validation data file/folder.')
 parser.add_argument('--test_split_name', type=str, default='testing', help='Name for the test data file/folder.')
@@ -101,11 +101,9 @@ parser.add_argument('--workers', type=int, default=4, help='number of workers us
 parser.add_argument('--resume', type=str, default='', help='checkpoint file path to resume training')
 parser.add_argument('--evaluate', action='store_true', help='evaluate only flag')
 parser.add_argument('--seeds', type=int, nargs='+', default=[456789], help='list of random seeds for multiple trials')
+parser.add_argument('--pretrained', type=str, default='', help='pretrained model file path')
 
 args, unknown = parser.parse_known_args()
-
-# Set seed for reproducibility
-set_seed(args.seed)
 
 # Initialize training state variables
 args.start_epoch, args.best_loss = 0, 1e5

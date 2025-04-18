@@ -65,7 +65,11 @@ def gai_loss(
     
     # Balancing term based on GMM
     sum_var = gmm['variances'] + noise_var
-    balancing_term = - 0.5 * sum_var.log() - 0.5 * (pred - gmm['means']).pow(2) / sum_var + gmm['weights'].log()
+    
+    # FIX: Reshape pred to [batch_size, 1] for proper broadcasting with gmm['means']
+    pred_reshaped = pred.view(-1, 1)
+    
+    balancing_term = - 0.5 * sum_var.log() - 0.5 * (pred_reshaped - gmm['means']).pow(2) / sum_var + gmm['weights'].log()
     balancing_term = torch.logsumexp(balancing_term, dim=-1, keepdim=True)
     
     # Combine terms and apply scaling
