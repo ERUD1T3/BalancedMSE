@@ -534,7 +534,7 @@ def main():
     """
     if args.gpu is not None:
         if torch.cuda.is_available():
-            print(f"Use GPU: {args.gpu} for training")
+            print(f"Using GPU: {args.gpu} for training")
         else:
             print("CUDA not available, using CPU.")
             args.gpu = None
