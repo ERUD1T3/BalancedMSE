@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from tensorboard_logger import Logger
 
 from loss import *
-from neurips2025.tab_ds import TabDS, load_tabular_splits, set_seed
+from tab_ds import TabDS, load_tabular_splits, set_seed
 from mlp import create_mlp
 from utils import *
 from balanaced_mse import *

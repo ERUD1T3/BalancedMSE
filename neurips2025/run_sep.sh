@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # --- Configuration based on Python variables ---
-SEED=456789 # First seed from TRIAL_SEEDS
+SEEDS="456789" # First seed from TRIAL_SEEDS
 DATASET="sep" # Assumed from DS_PATH='data/sep_cme' and train.py choices
 BATCH_SIZE=200
-EPOCHS=9999
+EPOCHS=5
 MLP_HIDDENS="512 32 256 32 128 32 64 32"
 MLP_EMBED_DIM=32
 MLP_DROPOUT=0.5
@@ -22,10 +22,10 @@ GMM_FILE="C:/Users/the_3/Documents/github/BalancedMSE/neurips2025/checkpoint/sep
 UPPER_THRESHOLD=2.30258509299
 
 # --- Run Training ---
-echo "Starting training for dataset: ${DATASET}, seed: ${SEED}"
+echo "Starting training for dataset: ${DATASET}, seeds: ${SEEDS}"
 
 python3 train.py \
-    --seed ${SEED} \
+    --seeds ${SEEDS} \
     --dataset ${DATASET} \
     --batch_size ${BATCH_SIZE} \
     --epoch ${EPOCHS} \
@@ -43,4 +43,4 @@ python3 train.py \
     # --schedule 60 80 # Uncomment to use default LR schedule
     # Add other arguments from train.py if needed
 
-echo "Training finished for seed: ${SEED}"
+echo "Training finished for seeds: ${SEEDS}"

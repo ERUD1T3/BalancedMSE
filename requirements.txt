@@ -1,0 +1,9 @@
+numpy
+scipy
+torch
+pandas
+scikit-learn
+tqdm
+matplotlib
+tensorboard_logger
+joblib

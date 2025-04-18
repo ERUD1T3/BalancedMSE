@@ -2,6 +2,7 @@ from fds import FDS
 
 import torch
 import torch.nn as nn
+from typing import Union
 
 
 class MLP(nn.Module):
@@ -18,11 +19,11 @@ class MLP(nn.Module):
         self,
         input_dim: int = 100,
         output_dim: int = 1,
-        hiddens: list[int] | None = None,
+        hiddens: Union[list[int], None] = None,
         skipped_layers: int = 1,
         embed_dim: int = 128,
         skip_repr: bool = True,
-        activation: nn.Module | None = None,
+        activation: Union[nn.Module, None] = None,
         dropout: float = 0.2,
         name: str = 'mlp',
         fds: bool = False,
@@ -121,9 +122,9 @@ class MLP(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        labels: torch.Tensor | None = None,
-        epoch: int | None = None
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        labels: Union[torch.Tensor, None] = None,
+        epoch: Union[int, None] = None
+    ) -> Union[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
         """
         Computes the forward pass of the MLP.
 
@@ -242,11 +243,11 @@ class MLP(nn.Module):
 def create_mlp(
     input_dim: int = 100,
     output_dim: int = 1,
-    hiddens: list[int] | None = None,
+    hiddens: Union[list[int], None] = None,
     skipped_layers: int = 1,
     embed_dim: int = 128,
     skip_repr: bool = True,
-    activation: nn.Module | None = None,
+    activation: Union[nn.Module, None] = None,
     dropout: float = 0.2,
     name: str = 'mlp',
     fds: bool = False,
