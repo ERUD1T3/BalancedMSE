@@ -24,7 +24,7 @@ UPPER_THRESHOLD=2.30258509299
 # --- Run Training ---
 echo "Starting training for dataset: ${DATASET}, seed: ${SEED}"
 
-python train.py \
+python3 train.py \
     --seed ${SEED} \
     --dataset ${DATASET} \
     --batch_size ${BATCH_SIZE} \
