@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # --- Configuration based on Python variables ---
-SEEDS="456789 42 123" # First seed from TRIAL_SEEDS
+SEEDS="456789 42 123 0 9999" # First seed from TRIAL_SEEDS
 DATASET="sep" # Assumed from DS_PATH='data/sep_cme' and train.py choices
 BATCH_SIZE=200
-EPOCHS=25
+EPOCHS=5003
 MLP_HIDDENS="512 32 256 32 128 32 64 32"
 MLP_EMBED_DIM=32
 MLP_DROPOUT=0.5
@@ -35,7 +35,7 @@ python3 train.py \
     --mlp_dropout ${MLP_DROPOUT} \
     --lr ${LR} \
     --weight_decay ${WEIGHT_DECAY} \
-    --loss focal_mse \
+    --loss mse \
     --lds \
     --fds \
     --reweight sqrt_inv \
