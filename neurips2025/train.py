@@ -4,7 +4,7 @@ import logging
 from tqdm import tqdm
 from collections import defaultdict
 from scipy.stats import gmean
-from typing import Dict, List, Tuple, Optional, Union
+from typing import Dict, Tuple, Optional, Union
 
 import torch
 import torch.nn as nn
