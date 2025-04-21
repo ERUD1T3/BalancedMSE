@@ -383,7 +383,11 @@ def run_trial(trial_seed):
                 raise FileNotFoundError(f"Specified GMM file not found: {gmm_path}")
 
             print(f"Loading GMM parameters from: {gmm_path}")
-            criterion = GAILoss(args.init_noise_sigma, gmm_path)
+            criterion = GAILoss(args.init_noise_sigma, gmm_path, device=args.gpu)
+
+            # Add this line to move criterion to the same device as the model
+            if args.gpu is not None:
+                criterion.to(f'cuda:{args.gpu}')
         elif args.imp == 'bmc':
             criterion = BMCLoss(args.init_noise_sigma)
         elif args.imp == 'bni':

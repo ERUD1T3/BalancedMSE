@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from torch.nn.modules.loss import _Loss
 import joblib
-from typing import Dict, List, Union, Tuple, Optional
+from typing import Dict, List
 
 
 class GAILoss(_Loss):
@@ -14,14 +14,21 @@ class GAILoss(_Loss):
     Args:
         init_noise_sigma (float): Initial value for the noise standard deviation.
         gmm (str): Path to the joblib file containing the GMM parameters.
+        device (torch.device or int, optional): Device to use for tensors. If None, uses the default device.
     """
-    def __init__(self, init_noise_sigma: float, gmm: str) -> None:
+    def __init__(self, init_noise_sigma: float, gmm: str, device=None) -> None:
         super(GAILoss, self).__init__()
+        # Determine device
+        if device is None:
+            device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        elif isinstance(device, int):
+            device = torch.device(f"cuda:{device}" if torch.cuda.is_available() else "cpu")
+            
         # Load GMM from file and convert to PyTorch tensors
         self.gmm = joblib.load(gmm)
-        self.gmm = {k: torch.tensor(self.gmm[k]).cuda() for k in self.gmm}
+        self.gmm = {k: torch.tensor(self.gmm[k], device=device) for k in self.gmm}
         # Learnable noise parameter
-        self.noise_sigma = torch.nn.Parameter(torch.tensor(init_noise_sigma, device="cuda"))
+        self.noise_sigma = torch.nn.Parameter(torch.tensor(init_noise_sigma, device=device))
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """
