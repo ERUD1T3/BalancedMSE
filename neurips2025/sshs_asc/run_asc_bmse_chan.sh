@@ -3,7 +3,7 @@
 # --- Configuration based on Python variables ---
 SEEDS="456789 42 123 0 9999" # First seed from TRIAL_SEEDS
 DATASET="asc" # Dataset name
-BATCH_SIZE=32768
+BATCH_SIZE=16384
 EPOCHS=6000
 MLP_HIDDENS="4096 1024 2048 1024"
 MLP_EMBED_DIM=1024
@@ -39,8 +39,8 @@ python train.py \
     --bmse \
     --imp gai \
     --gmm_file ${GMM_FILE} \
-    --gpu 1 # Uncomment and set GPU ID if needed
+    --gpu 0 # Uncomment and set GPU ID if needed
     # --schedule 60 80 # Uncomment to use default LR schedule
     # Add other arguments from train.py if needed
 
-echo "Training finished for seed: ${SEED}"
+echo "Training finished for seeds: ${SEEDS}"

@@ -14,7 +14,6 @@ from tensorboard_logger import Logger
 
 from loss import *
 from tab_ds import TabDS, load_tabular_splits, set_seed
-from traceback import format_exc
 from mlp import create_mlp
 from utils import *
 from balanaced_mse import *
@@ -23,6 +22,9 @@ from metrics import (
     evaluate_sarcos_metrics, evaluate_bf_metrics, evaluate_asc_metrics,
     save_results_to_csv
 )
+
+# make only gpu:1 visible
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 # Disable KMP warnings
 os.environ["KMP_WARNINGS"] = "FALSE"
