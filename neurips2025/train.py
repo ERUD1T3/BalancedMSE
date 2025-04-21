@@ -24,7 +24,7 @@ from metrics import (
 )
 
 # make only gpu:1 visible
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 # Disable KMP warnings
 os.environ["KMP_WARNINGS"] = "FALSE"
