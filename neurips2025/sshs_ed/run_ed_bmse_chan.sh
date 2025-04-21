@@ -27,7 +27,7 @@ echo "Starting training for dataset: ${DATASET}, seeds: ${SEEDS}"
 
 python train.py \
     --seeds ${SEEDS} \
-    --data-dir ${DATA_DIR} \
+    --data_dir ${DATA_DIR} \
     --dataset ${DATASET} \
     --batch_size ${BATCH_SIZE} \
     --epoch ${EPOCHS} \
@@ -43,4 +43,4 @@ python train.py \
     # --schedule 60 80 # Uncomment to use default LR schedule
     # Add other arguments from train.py if needed
 
-echo "Training finished for seed: ${SEED}"
+echo "Training finished for seeds: ${SEEDS}"

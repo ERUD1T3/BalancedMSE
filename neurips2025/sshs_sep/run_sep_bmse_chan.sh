@@ -26,7 +26,7 @@ echo "Starting training for dataset: ${DATASET}, seeds: ${SEEDS}"
 
 python3 train.py \
     --seeds ${SEEDS} \
-    --data-dir ${DATA_DIR} \
+    --data_dir ${DATA_DIR} \
     --dataset ${DATASET} \
     --batch_size ${BATCH_SIZE} \
     --epoch ${EPOCHS} \
