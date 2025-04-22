@@ -119,19 +119,26 @@ def prepare_folders(args: Any) -> None:
     Args:
         args: Arguments containing store_root, store_name, resume, pretrained, and evaluate.
     """
-    folders_util = [args.store_root, os.path.join(args.store_root, args.store_name)]
-    # Check if output folder exists and handle overwriting
-    if os.path.exists(folders_util[-1]) and not args.resume and not args.pretrained and not args.evaluate:
-        if query_yes_no('overwrite previous folder: {} ?'.format(folders_util[-1])):
-            shutil.rmtree(folders_util[-1])
-            print(folders_util[-1] + ' removed.')
-        else:
-            raise RuntimeError('Output folder {} already exists'.format(folders_util[-1]))
-    # Create folders if they don't exist
-    for folder in folders_util:
-        if not os.path.exists(folder):
-            print(f"===> Creating folder: {folder}")
-            os.mkdir(folder)
+    folder_path = os.path.join(args.store_root, args.store_name)
+    
+    if os.path.exists(folder_path) and not args.resume and not args.pretrained and not args.evaluate:
+        # --- New Automatic Overwrite Logic ---
+        print(f"Folder {folder_path} exists. Removing automatically.")
+        shutil.rmtree(folder_path)
+        print(f"{folder_path} removed.")
+        # --- End Automatic Overwrite Logic ---
+    
+    try:
+        print(f"===> Creating folder: {folder_path}")
+        os.makedirs(folder_path, exist_ok=True)  # exist_ok=True handles race conditions
+    except Exception as e:
+        print(f"Could not create folder {folder_path}: {e}")
+        # Handle error appropriately
+    
+    # Create store_root if it doesn't exist
+    if not os.path.exists(args.store_root):
+        print(f"===> Creating folder: {args.store_root}")
+        os.makedirs(args.store_root, exist_ok=True)
 
 
 def adjust_learning_rate(optimizer: torch.optim.Optimizer, epoch: int, args: Any) -> None:

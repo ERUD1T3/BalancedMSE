@@ -24,7 +24,7 @@ from metrics import (
 )
 
 # make only gpu:1 visible
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 # Disable KMP warnings
 os.environ["KMP_WARNINGS"] = "FALSE"
@@ -88,7 +88,8 @@ parser.add_argument('--mlp_dropout', type=float, default=0.1, help='MLP dropout 
 
 parser.add_argument('--store_root', type=str, default='checkpoint', help='root path for storing checkpoints, logs')
 parser.add_argument('--store_name', type=str, default='', help='experiment store name')
-parser.add_argument('--gpu', type=int, default=None, help='GPU ID to use')
+parser.add_argument('--gpu', type=int, default=None, help='GPU ID to use (for CUDA). Ignored if --mps is used.')
+parser.add_argument('--mps', action='store_true', default=False, help='Use MPS backend on Apple Silicon if available.')
 parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'sgd'], help='optimizer type')
 parser.add_argument('--loss', type=str, default='mse', choices=['mse', 'l1', 'focal_l1', 'focal_mse', 'huber'],
                     help='training loss type')
@@ -155,12 +156,13 @@ print(f"Store name: {args.store_name}")
 # Initialize TensorBoard logger
 tb_logger = Logger(logdir=os.path.join(args.store_root, args.store_name), flush_secs=2)
 
-def run_trial(trial_seed):
+def run_trial(trial_seed, device):
     """
     Run a single trial with the specified random seed.
     
     Args:
         trial_seed: Random seed for this trial
+        device: The torch device to use (e.g., 'cuda:0', 'mps', 'cpu')
     """
     # Set seed for reproducibility
     set_seed(trial_seed)
@@ -212,7 +214,7 @@ def run_trial(trial_seed):
     test_dataset = TabDS(X=X_test, y=y_test, reweight='none', lds=False)
 
     # Create data loaders
-    pin_memory = True if args.gpu is not None else False
+    pin_memory = True if device.type != 'cpu' else False
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
                               num_workers=args.workers, pin_memory=pin_memory, drop_last=False)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False,
@@ -244,7 +246,19 @@ def run_trial(trial_seed):
         momentum=args.fds_mmt
     )
 
-    model = torch.nn.DataParallel(model).cuda() if args.gpu is not None else model.cpu()
+    # Move the model to the selected device FIRST
+    model.to(device) 
+    print(f"Model moved to device: {device}")
+
+    # Apply DataParallel ONLY if using CUDA and a specific GPU ID is given
+    # Note: DataParallel is generally for multi-GPU CUDA.
+    # If you only ever use one GPU or MPS/CPU, this wrapper isn't needed.
+    if device.type == 'cuda' and args.gpu is not None: 
+        # You might want more sophisticated logic here if you intend multi-GPU training
+        # This assumes args.gpu specifies the *single* GPU for DataParallel.
+        print(f"Wrapping model with DataParallel for CUDA device {args.gpu}")
+        model = torch.nn.DataParallel(model, device_ids=[args.gpu]) 
+        # Note: After wrapping, the original model is model.module
 
     # Evaluation mode - load model and evaluate
     if args.evaluate:
@@ -257,18 +271,18 @@ def run_trial(trial_seed):
             return
 
         print(f"Loading checkpoint for evaluation: {ckpt_path}")
-        checkpoint = torch.load(ckpt_path)
+        checkpoint = torch.load(ckpt_path, map_location=device)
 
         state_dict = checkpoint['state_dict']
 
         model.load_state_dict(state_dict, strict=True)
         print(f"===> Checkpoint '{ckpt_path}' loaded (epoch [{checkpoint['epoch']}]), testing...")
-        validate(test_loader, model, prefix='Test')
+        validate(test_loader, model, device, prefix='Test')
 
         # Evaluate dataset-specific metrics
         print("\nEvaluating specialized metrics...")
-        if args.gpu is not None:
-            device = torch.device(f'cuda:{args.gpu}')
+        if device.type == 'cuda':
+            device = torch.device(f'cuda:{device.index}')
         else:
             device = torch.device('cpu')
         
@@ -349,7 +363,7 @@ def run_trial(trial_seed):
 
     # Load pretrained weights if specified
     if args.pretrained:
-        checkpoint = torch.load(args.pretrained, map_location="cpu")
+        checkpoint = torch.load(args.pretrained, map_location=device)
         from collections import OrderedDict
         new_state_dict = OrderedDict()
         # Only load non-classifier weights
@@ -364,8 +378,7 @@ def run_trial(trial_seed):
     if args.resume:
         if os.path.isfile(args.resume):
             print(f"===> Loading checkpoint '{args.resume}'")
-            checkpoint = torch.load(args.resume) if args.gpu is None else \
-                torch.load(args.resume, map_location=torch.device(f'cuda:{str(args.gpu)}'))
+            checkpoint = torch.load(args.resume, map_location=device)
             args.start_epoch = checkpoint['epoch']
             args.best_loss = checkpoint['best_loss']
             model.load_state_dict(checkpoint['state_dict'])
@@ -385,11 +398,11 @@ def run_trial(trial_seed):
                 raise FileNotFoundError(f"Specified GMM file not found: {gmm_path}")
 
             print(f"Loading GMM parameters from: {gmm_path}")
-            criterion = GAILoss(args.init_noise_sigma, gmm_path, device=args.gpu)
+            criterion = GAILoss(args.init_noise_sigma, gmm_path, device=device)
 
             # Add this line to move criterion to the same device as the model
-            if args.gpu is not None:
-                criterion.to(f'cuda:{args.gpu}')
+            if device.type == 'cuda':
+                criterion.to(f'cuda:{device.index}')
         elif args.imp == 'bmc':
             criterion = BMCLoss(args.init_noise_sigma)
         elif args.imp == 'bni':
@@ -420,10 +433,10 @@ def run_trial(trial_seed):
         adjust_learning_rate(optimizer, epoch, args)
         
         # Train for one epoch
-        train_loss = train(train_loader, model, optimizer, epoch, criterion)
+        train_loss = train(train_loader, model, optimizer, epoch, criterion, device)
         
         # Evaluate on validation set
-        val_loss_mse, val_loss_l1, val_loss_gmean = validate(val_loader, model, prefix='Val')
+        val_loss_mse, val_loss_l1, val_loss_gmean = validate(val_loader, model, device, prefix='Val')
 
         # Determine which metric to use for model selection
         loss_metric = val_loss_mse if args.loss == 'mse' else val_loss_l1
@@ -466,7 +479,7 @@ def run_trial(trial_seed):
         print(f"Error: Best checkpoint not found at {best_ckpt_path}")
         return
 
-    checkpoint = torch.load(best_ckpt_path)
+    checkpoint = torch.load(best_ckpt_path, map_location=device)
     print(f"Loaded best model from epoch {checkpoint['epoch']}, best val loss {checkpoint['best_loss']:.4f}")
 
     state_dict = checkpoint['state_dict']
@@ -474,14 +487,14 @@ def run_trial(trial_seed):
     model.load_state_dict(state_dict, strict=True)
 
     # Evaluate on test set
-    test_loss_mse, test_loss_l1, test_loss_gmean = validate(test_loader, model, prefix='Test')
+    test_loss_mse, test_loss_l1, test_loss_gmean = validate(test_loader, model, device, prefix='Test')
     
     print(f"Test Results: MSE [{test_loss_mse:.4f}], L1 [{test_loss_l1:.4f}], G-Mean [{test_loss_gmean:.4f}]\nDone")
 
     # Evaluate dataset-specific metrics
     print("\nEvaluating specialized metrics...")
-    if args.gpu is not None:
-        device = torch.device(f'cuda:{args.gpu}')
+    if device.type == 'cuda':
+        device = torch.device(f'cuda:{device.index}')
     else:
         device = torch.device('cpu')
     
@@ -539,18 +552,48 @@ def main():
     """
     Run multiple trials with different seeds.
     """
-    if args.gpu is not None:
-        if torch.cuda.is_available():
-            print(f"Using GPU: {args.gpu} for training")
+    if args.mps:
+        if torch.backends.mps.is_available() and torch.backends.mps.is_built():
+            device = torch.device("mps")
+            print("Using MPS (Apple Silicon GPU) backend as requested by --mps flag.")
+            # Ensure --gpu is ignored if MPS is active
+            if args.gpu is not None:
+                print(f"Warning: --gpu argument ({args.gpu}) ignored because --mps flag is set.")
+                args.gpu = None
         else:
-            print("CUDA not available, using CPU.")
+            print("Warning: --mps flag set, but MPS backend is not available. Falling back to CUDA/CPU.")
+            # Fallback logic starts here if MPS requested but unavailable
+            if args.gpu is not None and torch.cuda.is_available():
+                device = torch.device(f"cuda:{args.gpu}")
+                print(f"Using CUDA GPU: {args.gpu}")
+            elif torch.cuda.is_available():
+                device = torch.device("cuda")
+                print("CUDA available, using default CUDA device.")
+                args.gpu = torch.cuda.current_device() # Set gpu arg for consistency if needed elsewhere
+            else:
+                device = torch.device("cpu")
+                print("Neither MPS nor CUDA available, using CPU.")
+                args.gpu = None
+    else:
+        # Original CUDA/CPU logic if --mps is not set
+        if args.gpu is not None and torch.cuda.is_available():
+            device = torch.device(f"cuda:{args.gpu}")
+            print(f"Using CUDA GPU: {args.gpu}")
+        elif torch.cuda.is_available():
+            device = torch.device("cuda")
+            print("CUDA available, using default CUDA device.")
+            args.gpu = torch.cuda.current_device() # Set gpu arg for consistency if needed elsewhere
+        else:
+            device = torch.device("cpu")
+            print("CUDA not available (and --mps not specified), using CPU.")
             args.gpu = None
-    
+
     # Store original store name before adding seed
     original_store_name = args.store_name
     
     # Track metrics across all trials
-    all_test_metrics = []
+    all_test_metrics = defaultdict(list) 
+    all_standard_metrics = [] 
     
     # Run each trial with a different seed
     for trial_idx, seed in enumerate(args.seeds):
@@ -558,32 +601,31 @@ def main():
         print(f"TRIAL {trial_idx+1}/{len(args.seeds)} - SEED {seed}")
         print(f"{'='*50}\n")
         
-        # Reset store name for each trial
-        args.store_name = original_store_name
+        # Reset store name for each trial based on the original
+        args.store_name = original_store_name 
         
-        # Run the trial
-        trial_results = run_trial(seed)
+        # Run the trial, passing the selected device
+        trial_results = run_trial(seed, device) # Pass determined device here
+        
         if trial_results:
             test_mse, test_l1, test_gmean, specialized_metrics = trial_results
-            all_test_metrics.append((test_mse, test_l1, test_gmean))
-            
-            # Track specialized metrics across trials
-            if trial_idx == 0:
-                all_specialized_metrics = {k: [] for k in specialized_metrics.keys()}
+            all_standard_metrics.append((test_mse, test_l1, test_gmean))
             
             for k, v in specialized_metrics.items():
-                all_specialized_metrics[k].append(v)
-    
+                all_test_metrics[k].append(v)
+        else:
+            print(f"Trial with seed {seed} failed or did not return results.")
+
     # Print summary of all trials if we have results
-    if all_test_metrics:
+    if all_standard_metrics:
         print("\n\n" + "="*80)
         print(f"SUMMARY OF {len(args.seeds)} TRIALS")
         print("="*80)
         
         # Calculate mean and std of metrics across trials
-        mse_values = [m[0] for m in all_test_metrics]
-        l1_values = [m[1] for m in all_test_metrics]
-        gmean_values = [m[2] for m in all_test_metrics]
+        mse_values = [m[0] for m in all_standard_metrics]
+        l1_values = [m[1] for m in all_standard_metrics]
+        gmean_values = [m[2] for m in all_standard_metrics]
         
         mse_mean, mse_std = np.mean(mse_values), np.std(mse_values)
         l1_mean, l1_std = np.mean(l1_values), np.std(l1_values)
@@ -596,7 +638,7 @@ def main():
         # After reporting MSE, L1, and G-Mean
         print("\n----- Specialized Metrics -----")
         specialized_metrics_dict = {}
-        for metric_name, values in all_specialized_metrics.items():
+        for metric_name, values in all_test_metrics.items():
             mean_val = np.mean(values)
             std_val = np.std(values)
             specialized_metrics_dict[metric_name] = (mean_val, std_val)
@@ -609,7 +651,7 @@ def main():
 
 
         
-def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Optimizer, epoch: int, criterion: nn.Module) -> float:
+def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Optimizer, epoch: int, criterion: nn.Module, device: torch.device) -> float:
     """
     Train the model for one epoch.
     
@@ -619,6 +661,7 @@ def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Opt
         optimizer: Optimizer for updating model weights
         epoch: Current epoch number
         criterion: Loss function
+        device: The torch device to use (e.g., 'cuda:0', 'mps', 'cpu')
         
     Returns:
         float: Average training loss for the epoch
@@ -648,11 +691,11 @@ def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Opt
         # Measure data loading time
         data_time.update(time.time() - end)
         
-        if args.gpu is not None:
+        if device.type != 'cpu':
             inputs, targets, weights = \
-                inputs.cuda(args.gpu, non_blocking=True), \
-                targets.cuda(args.gpu, non_blocking=True), \
-                weights.cuda(args.gpu, non_blocking=True)
+                inputs.to(device, non_blocking=True), \
+                targets.to(device, non_blocking=True), \
+                weights.to(device, non_blocking=True)
         else:
             inputs, targets, weights = inputs.cpu(), targets.cpu(), weights.cpu()
 
@@ -700,8 +743,8 @@ def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Opt
         model.eval()
         with torch.no_grad():
             for (inputs, targets, _) in tqdm(train_loader, desc="FDS Feature Extraction"):
-                if args.gpu is not None:
-                    inputs, targets = inputs.cuda(args.gpu, non_blocking=True), targets.cuda(args.gpu, non_blocking=True)
+                if device.type != 'cpu':
+                    inputs, targets = inputs.to(device, non_blocking=True), targets.to(device, non_blocking=True)
                 else:
                     inputs, targets = inputs.cpu(), targets.cpu()
 
@@ -715,9 +758,9 @@ def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Opt
 
         encodings_tensor = torch.from_numpy(encodings)
         labels_tensor = torch.from_numpy(labels_array)
-        if args.gpu is not None:
-            encodings_tensor = encodings_tensor.cuda(args.gpu)
-            labels_tensor = labels_tensor.cuda(args.gpu)
+        if device.type != 'cpu':
+            encodings_tensor = encodings_tensor.to(device)
+            labels_tensor = labels_tensor.to(device)
 
         print(f"Calling FDS update with {encodings_tensor.shape} features and {labels_tensor.shape} labels.")
         fds_module = model.fds_module
@@ -732,6 +775,7 @@ def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Opt
 def validate(
         val_loader: DataLoader, 
         model: nn.Module,  
+        device: torch.device,
         prefix: str = 'Val'
     ) -> Tuple[float, float, float]:
     """
@@ -740,6 +784,7 @@ def validate(
     Args:
         val_loader: DataLoader for validation/test data
         model: The neural network model
+        device: The torch device to use (e.g., 'cuda:0', 'mps', 'cpu')
         prefix: Prefix for progress display ('Val' or 'Test')
         
     Returns:
@@ -771,8 +816,8 @@ def validate(
     with torch.no_grad():
         end = time.time()
         for idx, (inputs, targets, _) in enumerate(val_loader):
-            if args.gpu is not None:
-                inputs, targets = inputs.cuda(args.gpu, non_blocking=True), targets.cuda(args.gpu, non_blocking=True)
+            if device.type != 'cpu':
+                inputs, targets = inputs.to(device, non_blocking=True), targets.to(device, non_blocking=True)
             else:
                 inputs, targets = inputs.cpu(), targets.cpu()
 

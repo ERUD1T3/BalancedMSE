@@ -14,21 +14,29 @@ class GAILoss(_Loss):
     Args:
         init_noise_sigma (float): Initial value for the noise standard deviation.
         gmm (str): Path to the joblib file containing the GMM parameters.
-        device (torch.device or int, optional): Device to use for tensors. If None, uses the default device.
+        device (torch.device or str or int, optional): Device to use for tensors ('mps', 'cuda:0', 'cpu', etc.).
     """
     def __init__(self, init_noise_sigma: float, gmm: str, device=None) -> None:
         super(GAILoss, self).__init__()
-        # Determine device
+        # Determine device if not provided explicitly
         if device is None:
-            device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        elif isinstance(device, int):
-            device = torch.device(f"cuda:{device}" if torch.cuda.is_available() else "cpu")
+            if torch.backends.mps.is_available() and torch.backends.mps.is_built():
+                device = torch.device("mps")
+            elif torch.cuda.is_available():
+                device = torch.device("cuda:0")
+            else:
+                device = torch.device("cpu")
+        elif isinstance(device, (int, str)):
+            device = torch.device(device) # Convert str/int to torch.device
             
-        # Load GMM from file and convert to PyTorch tensors
+        self.device = device # Store device for later use if needed
+
+        # Load GMM from file and convert to PyTorch tensors with float32 dtype
         self.gmm = joblib.load(gmm)
-        self.gmm = {k: torch.tensor(self.gmm[k], device=device) for k in self.gmm}
-        # Learnable noise parameter
-        self.noise_sigma = torch.nn.Parameter(torch.tensor(init_noise_sigma, device=device))
+        # Explicitly set dtype=torch.float32 here
+        self.gmm = {k: torch.tensor(self.gmm[k], dtype=torch.float32, device=self.device) for k in self.gmm} 
+        # Learnable noise parameter, also ensure float32
+        self.noise_sigma = torch.nn.Parameter(torch.tensor(init_noise_sigma, dtype=torch.float32, device=self.device))
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """
