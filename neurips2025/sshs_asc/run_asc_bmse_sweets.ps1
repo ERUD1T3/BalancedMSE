@@ -3,8 +3,8 @@
 # --- Configuration based on Python variables ---
 $SEEDS = "456789 42 123 0 9999" # First seed from TRIAL_SEEDS
 $DATASET = "asc" # Dataset name
-$BATCH_SIZE = 16384
-$EPOCHS = 6031
+$BATCH_SIZE = 32768
+$EPOCHS = 5031
 $MLP_EMBED_DIM = 1024
 $MLP_DROPOUT = 0.2
 # MLP_SKIP_LAYERS=1 # Default in train.py
@@ -35,12 +35,10 @@ python train.py `
     --mlp_dropout $MLP_DROPOUT `
     --lr $LR `
     --weight_decay $WEIGHT_DECAY `
-    --loss mse `
-    --lds `
-    --fds `
-    --reweight sqrt_inv `
+    --bmse `
+    --imp gai `
+    --gmm_file $GMM_FILE `
     --gpu 0 `
-    --disable_logging
     # --schedule 60 80 # Uncomment to use default LR schedule
     # Add other arguments from train.py if needed
 

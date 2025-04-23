@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader
-from tensorboard_logger import Logger
+from tensorboard_logger import Logger, configure, log_value
 
 from loss import *
 from tab_ds import TabDS, load_tabular_splits, set_seed
@@ -105,6 +105,7 @@ parser.add_argument('--resume', type=str, default='', help='checkpoint file path
 parser.add_argument('--evaluate', action='store_true', help='evaluate only flag')
 parser.add_argument('--seeds', type=int, nargs='+', default=[456789], help='list of random seeds for multiple trials')
 parser.add_argument('--pretrained', type=str, default='', help='pretrained model file path')
+parser.add_argument('--disable_logging', action='store_true', default=False, help='Disable file and TensorBoard logging.')
 
 args, unknown = parser.parse_known_args()
 
@@ -136,24 +137,20 @@ if args.bmse:
         args.store_name += '_fixNoise'
 args.store_name = f"{args.dataset}_{args.model}{args.store_name}_{args.optimizer}_{args.loss}_lr{args.lr}_bs{args.batch_size}_wd{args.weight_decay}_epoch{args.epoch}"
 
-# Create folders for storing results
-prepare_folders(args)
-
-# Set up logging
+# Set up logging (StreamHandler only initially)
 logging.root.handlers = []
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(message)s",
     handlers=[
-        logging.FileHandler(os.path.join(args.store_root, args.store_name, 'training.log')),
         logging.StreamHandler()
     ])
 print = logging.info
 print(f"Args: {args}")
 print(f"Store name: {args.store_name}")
 
-# Initialize TensorBoard logger
-tb_logger = Logger(logdir=os.path.join(args.store_root, args.store_name), flush_secs=2)
+# Initialize tb_logger placeholder
+tb_logger = None
 
 def run_trial(trial_seed):
     """
@@ -162,19 +159,32 @@ def run_trial(trial_seed):
     Args:
         trial_seed: Random seed for this trial
     """
+    global trial_logger # Make trial_logger global or pass it around if needed elsewhere outside run_trial
+    trial_logger = None # Initialize trial_logger for this trial
+
     # Set seed for reproducibility
     set_seed(trial_seed)
     print(f"=== Starting trial with seed: {trial_seed} ===")
     
     # Update the store name to include the seed
     original_store_name = args.store_name
-    args.store_name = f"{original_store_name}_seed{trial_seed}"
-    
-    # Create folders for this trial
-    prepare_folders(args)
-    
-    # Set up logging for this trial
-    trial_logger = Logger(logdir=os.path.join(args.store_root, args.store_name), flush_secs=2)
+    trial_store_name = f"{original_store_name}_seed{trial_seed}"
+    args.store_name = trial_store_name # Temporarily set args.store_name for this trial's prepare_folders
+
+    # Create folders for this trial (only if logging is enabled)
+    if not args.disable_logging:
+        prepare_folders(args) # prepare_folders uses args.store_name
+
+        # Set up logging for this trial only if enabled
+        try:
+            trial_logger = Logger(logdir=os.path.join(args.store_root, trial_store_name), flush_secs=2)
+            print(f"Initialized trial TensorBoard logger in: {os.path.join(args.store_root, trial_store_name)}")
+        except Exception as e:
+            print(f"Warning: Failed to initialize trial TensorBoard logger: {e}")
+            trial_logger = None # Ensure it's None if init fails
+
+    # Reset args.store_name back to the base name for the next trial
+    args.store_name = original_store_name
     
     # Reset best loss for this trial
     args.best_loss = 1e5
@@ -433,7 +443,7 @@ def run_trial(trial_seed):
         args.best_loss = min(loss_metric, args.best_loss)
         print(f"Best Validation {'MSE' if 'mse' in args.loss else 'L1'} Loss: {args.best_loss:.4f}")
         
-        # Save checkpoint
+        # Save checkpoint (conditionally create directory inside if needed)
         state_dict_to_save = model.state_dict()
         enhanced_save_checkpoint(args, {
             'epoch': epoch + 1,
@@ -442,26 +452,31 @@ def run_trial(trial_seed):
             'state_dict': state_dict_to_save,
             'optimizer': optimizer.state_dict(),
             'args': vars(args)
-        }, is_best, epoch + 1 == args.epoch)
+        }, is_best, epoch + 1 == args.epoch, trial_store_name=trial_store_name) # Pass trial name
         
         print(f"Epoch #{epoch}: Train loss [{train_loss:.4f}]; "
               f"Val loss: MSE [{val_loss_mse:.4f}], L1 [{val_loss_l1:.4f}], G-Mean [{val_loss_gmean:.4f}]")
 
-        # Log metrics to TensorBoard
-        trial_logger.log_value('train_loss', train_loss, epoch)
-        trial_logger.log_value('val/loss_mse', val_loss_mse, epoch)
-        trial_logger.log_value('val/loss_l1', val_loss_l1, epoch)
-        trial_logger.log_value('val/loss_gmean', val_loss_gmean, epoch)
-        
-        for i, param_group in enumerate(optimizer.param_groups):
-            trial_logger.log_value(f'lr/group_{i}', param_group['lr'], epoch)
-        if args.bmse and not args.fix_noise_sigma and hasattr(criterion, 'noise_sigma'):
-            trial_logger.log_value('noise_sigma', criterion.noise_sigma.item(), epoch)
+        # Log metrics to TensorBoard (only if trial_logger was initialized)
+        if trial_logger:
+            try:
+                trial_logger.log_value('train_loss', train_loss, epoch)
+                trial_logger.log_value('val/loss_mse', val_loss_mse, epoch)
+                trial_logger.log_value('val/loss_l1', val_loss_l1, epoch)
+                trial_logger.log_value('val/loss_gmean', val_loss_gmean, epoch)
+
+                for i, param_group in enumerate(optimizer.param_groups):
+                    trial_logger.log_value(f'lr/group_{i}', param_group['lr'], epoch)
+                if args.bmse and not args.fix_noise_sigma and hasattr(criterion, 'noise_sigma'):
+                    trial_logger.log_value('noise_sigma', criterion.noise_sigma.item(), epoch)
+            except Exception as e:
+                print(f"Warning: Failed to log to TensorBoard: {e}")
 
     # Test with best checkpoint after training
     print("=" * 120)
     print("Testing best model on testset...")
-    best_ckpt_path = os.path.join(args.store_root, args.store_name, 'ckpt.best.pth.tar')
+    # Use trial_store_name to find the correct checkpoint
+    best_ckpt_path = os.path.join(args.store_root, trial_store_name, 'ckpt.best.pth.tar')
     if not os.path.exists(best_ckpt_path):
         print(f"Error: Best checkpoint not found at {best_ckpt_path}")
         return
@@ -528,10 +543,14 @@ def run_trial(trial_seed):
     for metric_name, value in metrics.items():
         print(f"{metric_name}: {value:.4f}")
     
-    # Log metrics to tensorboard
-    for metric_name, value in metrics.items():
-        trial_logger.log_value(f'test/{metric_name}', value, 0)
-    
+    # Log metrics to tensorboard (only if trial_logger initialized)
+    if trial_logger:
+        try:
+            for metric_name, value in metrics.items():
+                trial_logger.log_value(f'test/{metric_name}', value, 0) # Use step 0 or checkpoint['epoch']?
+        except Exception as e:
+            print(f"Warning: Failed to log test metrics to TensorBoard: {e}")
+
     # Incorporate specialized metrics in the return values
     return test_loss_mse, test_loss_l1, test_loss_gmean, metrics
 
@@ -539,19 +558,51 @@ def main():
     """
     Run multiple trials with different seeds.
     """
+    global tb_logger # Keep if needed, though likely not used globally
+
     if args.gpu is not None:
         if torch.cuda.is_available():
             print(f"Using GPU: {args.gpu} for training")
         else:
             print("CUDA not available, using CPU.")
             args.gpu = None
-    
+
+    # <<< Check the flag before preparing folders and setting up loggers >>>
+    if not args.disable_logging:
+        # Prepare the main experiment folder *once*
+        # Note: prepare_folders uses the base args.store_name constructed earlier
+        prepare_folders(args) # This will create the directory if it doesn't exist
+
+        # Now that the directory exists, add the FileHandler
+        log_file_path = os.path.join(args.store_root, args.store_name, 'training.log')
+        try:
+            file_handler = logging.FileHandler(log_file_path)
+            file_handler.setFormatter(logging.Formatter("%(asctime)s | %(message)s"))
+            logging.getLogger().addHandler(file_handler)
+            print(f"Added FileHandler logging to: {log_file_path}")
+        except Exception as e:
+             print(f"Warning: Failed to initialize FileHandler logging: {e}")
+
+        # Initialize TensorBoard logger now that the directory exists
+        # Note: This main tb_logger isn't actually used for logging values in the current code.
+        # The trial_logger inside run_trial handles that. We could remove this one.
+        # try:
+        #     tb_logger = Logger(logdir=os.path.join(args.store_root, args.store_name), flush_secs=2)
+        #     print(f"Initialized MAIN TensorBoard logger in: {os.path.join(args.store_root, args.store_name)}")
+        # except Exception as e:
+        #      print(f"Warning: Failed to initialize MAIN TensorBoard logger: {e}")
+        #      tb_logger = None # Ensure it's None if init fails
+    else:
+        print("File and TensorBoard logging are DISABLED.")
+        tb_logger = None # Ensure tb_logger is None if logging is disabled
+
     # Store original store name before adding seed
-    original_store_name = args.store_name
-    
+    original_store_name = args.store_name # Store the base name
+
     # Track metrics across all trials
     all_test_metrics = []
-    
+    all_specialized_metrics = {} # Initialize here
+
     # Run each trial with a different seed
     for trial_idx, seed in enumerate(args.seeds):
         print(f"\n\n{'='*50}")
@@ -569,10 +620,19 @@ def main():
             
             # Track specialized metrics across trials
             if trial_idx == 0:
+                # Initialize keys based on the first trial's results
                 all_specialized_metrics = {k: [] for k in specialized_metrics.keys()}
-            
-            for k, v in specialized_metrics.items():
-                all_specialized_metrics[k].append(v)
+
+            # Check if specialized_metrics is not None and is a dictionary
+            if specialized_metrics and isinstance(specialized_metrics, dict):
+                for k, v in specialized_metrics.items():
+                    if k in all_specialized_metrics:
+                         all_specialized_metrics[k].append(v)
+                    else:
+                         # Handle case where a metric might not appear in the first trial
+                         all_specialized_metrics[k] = [v]
+            else:
+                print(f"Warning: specialized_metrics for seed {seed} was not a dictionary or was None.")
     
     # Print summary of all trials if we have results
     if all_test_metrics:
@@ -607,8 +667,6 @@ def main():
         csv_path = save_results_to_csv(args, specialized_metrics_dict, standard_metrics)
         print(f"Complete benchmark results saved to: {csv_path}")
 
-
-        
 def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Optimizer, epoch: int, criterion: nn.Module) -> float:
     """
     Train the model for one epoch.
@@ -727,7 +785,6 @@ def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Opt
         model.train()
 
     return losses.avg
-
 
 def validate(
         val_loader: DataLoader, 
@@ -934,37 +991,47 @@ def threshold_metrics(
     
     return metrics_dict
 
-def enhanced_save_checkpoint(args, state, is_best, is_final=False):
+def enhanced_save_checkpoint(args, state, is_best, is_final=False, trial_store_name=None):
     """
     Wrapper for save_checkpoint with essential error handling and logging
+    Uses trial_store_name if provided, otherwise uses args.store_name.
     """
-    try:
-        # Create checkpoint directory if it doesn't exist
-        checkpoint_dir = os.path.join(args.store_root, args.store_name)
-        os.makedirs(checkpoint_dir, exist_ok=True)
-        
-        # Save the checkpoint
-        filename = os.path.join(checkpoint_dir, 'ckpt.last.pth.tar')
-        torch.save(state, filename + '.tmp')
-        shutil.move(filename + '.tmp', filename)
-        logging.info(f"Checkpoint saved to: {filename}")
-        
-        if is_best:
-            best_filename = os.path.join(checkpoint_dir, 'ckpt.best.pth.tar')
-            shutil.copyfile(filename, best_filename + '.tmp')
-            shutil.move(best_filename + '.tmp', best_filename)
-            logging.info(f"Best checkpoint saved to: {best_filename}")
-        
-        if is_final:
-            final_filename = os.path.join(checkpoint_dir, 'ckpt.final.pth.tar')
-            shutil.copyfile(filename, final_filename)
-            logging.info(f"Final checkpoint saved to: {final_filename}")
-    
-    except Exception as e:
-        logging.error(f"Error saving checkpoint: {str(e)}")
+    # Use the specific trial name if provided, otherwise default to args.store_name
+    current_store_name = trial_store_name if trial_store_name else args.store_name
+    checkpoint_dir = os.path.join(args.store_root, current_store_name)
 
+    # Only proceed with saving if logging is not disabled (implies folders are managed)
+    if not args.disable_logging:
+        try:
+            # Create checkpoint directory if it doesn't exist
+            os.makedirs(checkpoint_dir, exist_ok=True)
 
+            # Save the checkpoint
+            filename = os.path.join(checkpoint_dir, 'ckpt.last.pth.tar')
+            torch.save(state, filename + '.tmp')
+            shutil.move(filename + '.tmp', filename)
+            logging.info(f"Checkpoint saved to: {filename}") # Use logging.info which respects log levels
 
+            if is_best:
+                best_filename = os.path.join(checkpoint_dir, 'ckpt.best.pth.tar')
+                shutil.copyfile(filename, best_filename + '.tmp')
+                shutil.move(best_filename + '.tmp', best_filename)
+                logging.info(f"Best checkpoint saved to: {best_filename}")
+
+            if is_final:
+                final_filename = os.path.join(checkpoint_dir, 'ckpt.final.pth.tar')
+                shutil.copyfile(filename, final_filename)
+                logging.info(f"Final checkpoint saved to: {final_filename}")
+
+        except Exception as e:
+            logging.error(f"Error saving checkpoint to {checkpoint_dir}: {str(e)}")
+    # else:
+        # Optionally log to console that checkpoint saving is skipped
+        # print(f"Skipping checkpoint saving to {checkpoint_dir} (logging disabled).")
 
 if __name__ == '__main__':
+    # Optional: Set multiprocessing start method early for Windows consistency
+    # import multiprocessing
+    # multiprocessing.set_start_method('spawn', force=True)
     main()
+
