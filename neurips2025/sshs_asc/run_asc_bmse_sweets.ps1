@@ -3,7 +3,7 @@
 # --- Configuration based on Python variables ---
 $SEEDS = "456789 42 123 0 9999" # First seed from TRIAL_SEEDS
 $DATASET = "asc" # Dataset name
-$BATCH_SIZE = 32768
+$BATCH_SIZE = 20000
 $EPOCHS = 5031
 $MLP_EMBED_DIM = 1024
 $MLP_DROPOUT = 0.2

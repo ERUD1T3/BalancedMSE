@@ -5,6 +5,7 @@ from tqdm import tqdm
 from collections import defaultdict
 from scipy.stats import gmean
 from typing import Dict, Tuple, Optional, Union
+import os
 
 import torch
 import torch.nn as nn
@@ -131,7 +132,8 @@ if args.retrain_regressor:
 if args.bmse:
     args.store_name += f'_{args.imp}_{args.init_noise_sigma}_{args.sigma_lr}'
     if args.imp == 'gai':
-        gmm_suffix = args.gmm_file.split('/')[-1].replace('.pkl','')
+        gmm_basename = os.path.basename(args.gmm_file)
+        gmm_suffix = gmm_basename.replace('.pkl', '')
         args.store_name += f'_{gmm_suffix}'
     if args.fix_noise_sigma:
         args.store_name += '_fixNoise'
@@ -146,8 +148,6 @@ logging.basicConfig(
         logging.StreamHandler()
     ])
 print = logging.info
-print(f"Args: {args}")
-print(f"Store name: {args.store_name}")
 
 # Initialize tb_logger placeholder
 tb_logger = None
@@ -558,7 +558,11 @@ def main():
     """
     Run multiple trials with different seeds.
     """
-    global tb_logger # Keep if needed, though likely not used globally
+    global tb_logger
+
+    # <<< PRINT args and store_name ONCE here >>>
+    print(f"Args: {args}")
+    print(f"Store name: {args.store_name}") # Print the initial base store name
 
     if args.gpu is not None:
         if torch.cuda.is_available():
@@ -567,7 +571,7 @@ def main():
             print("CUDA not available, using CPU.")
             args.gpu = None
 
-    # <<< Check the flag before preparing folders and setting up loggers >>>
+    # Check the flag before preparing folders and setting up loggers
     if not args.disable_logging:
         # Prepare the main experiment folder *once*
         # Note: prepare_folders uses the base args.store_name constructed earlier
