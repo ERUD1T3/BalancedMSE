@@ -4,7 +4,7 @@
 SEEDS="456789 42 123 0 9999" # First seed from TRIAL_SEEDS
 DATASET="asc" # Dataset name
 BATCH_SIZE=16384
-EPOCHS=5005
+EPOCHS=6008
 MLP_HIDDENS="4096 1024 2048 1024"
 MLP_EMBED_DIM=1024
 MLP_DROPOUT=0.2
@@ -15,8 +15,8 @@ LR=5e-4 # From START_LR
 WEIGHT_DECAY=0.1 # From WEIGHT_DECAY
 
 # BMSE / GAI specific settings
-GMM_FILE="/home/jmoukpe2016/Desktop/BalancedMSE/neurips2025/checkpoint/asc_gmm_K8.pkl" # Placeholder - replace with actual path/name if needed
-DATA_DIR="/home/jmoukpe2016/Desktop/BalancedMSE/neurips2025/data"
+GMM_FILE="C:\Users\kayla\Desktop\BalancedMSE\neurips2025\checkpoint\asc_gmm_K8.pkl" # Placeholder - replace with actual path/name if needed
+DATA_DIR="C:\Users\kayla\Desktop\BalancedMSE\neurips2025\data"
 
 # Lower and upper thresholds for label range categorization
 LOWER_THRESHOLD=2.30102999566
@@ -36,9 +36,10 @@ python train.py \
     --mlp_dropout ${MLP_DROPOUT} \
     --lr ${LR} \
     --weight_decay ${WEIGHT_DECAY} \
-    --bmse \
-    --imp gai \
-    --gmm_file ${GMM_FILE} \
+    --loss mse \
+    --lds \
+    --fds \
+    --reweight inverse \
     --gpu 0 # Uncomment and set GPU ID if needed
     # --schedule 60 80 # Uncomment to use default LR schedule
     # Add other arguments from train.py if needed
