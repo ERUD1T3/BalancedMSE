@@ -3,8 +3,8 @@
 # --- Configuration based on Python variables ---
 SEEDS="456789 42 123 0 9999" # First seed from TRIAL_SEEDS
 DATASET="sarcos" # Dataset name
-BATCH_SIZE=14800
-EPOCHS=60020
+BATCH_SIZE=18000
+EPOCHS=4001
 MLP_HIDDENS="512 32 256 32 128 32 64 32"
 MLP_EMBED_DIM=32
 MLP_DROPOUT=0.2
