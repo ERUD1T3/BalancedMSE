@@ -7,3 +7,4 @@ tqdm
 matplotlib
 tensorboard_logger
 joblib
+protobuf~=3.20

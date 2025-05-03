@@ -3,8 +3,8 @@
 # --- Configuration based on Python variables ---
 SEEDS="456789 42 123 0 9999" # First seed from TRIAL_SEEDS
 DATASET="bf" # Dataset name
-BATCH_SIZE=4096
-EPOCHS=6000
+BATCH_SIZE=8192
+EPOCHS=4000
 MLP_HIDDENS="4096 512 2048 512 1024 512"
 MLP_EMBED_DIM=512
 MLP_DROPOUT=0.1
@@ -44,4 +44,4 @@ python train.py \
     # --schedule 60 80 # Uncomment to use default LR schedule
     # Add other arguments from train.py if needed
 
-echo "Training finished for seed: ${SEED}"
+echo "Training finished for seeds: ${SEEDS}"

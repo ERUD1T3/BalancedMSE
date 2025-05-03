@@ -44,4 +44,4 @@ python train.py \
     # --schedule 60 80 # Uncomment to use default LR schedule
     # Add other arguments from train.py if needed
 
-echo "Training finished for seed: ${SEED}"
+echo "Training finished for seeds: ${SEEDS}"
