@@ -10,7 +10,6 @@ import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader
-from tensorboard_logger import Logger
 
 from loss import *
 from tab_ds import TabDS, load_tabular_splits, set_seed
@@ -101,7 +100,7 @@ parser.add_argument('--momentum', type=float, default=0.9, help='optimizer momen
 parser.add_argument('--weight_decay', type=float, default=1e-2, help='optimizer weight decay')
 parser.add_argument('--schedule', type=int, nargs='*', default=[60, 80], help='lr schedule (when to drop lr by 10x)')
 parser.add_argument('--batch_size', type=int, default=256, help='batch size')
-parser.add_argument('--print_freq', type=int, default=50, help='logging frequency')
+parser.add_argument('--print_freq', type=int, default=100, help='logging frequency')
 parser.add_argument('--workers', type=int, default=4, help='number of workers used in data loading')
 # Checkpoints
 parser.add_argument('--resume', type=str, default='', help='checkpoint file path to resume training')
@@ -158,7 +157,7 @@ print(f"Args: {args}")
 print(f"Store name: {args.store_name}")
 
 # Initialize TensorBoard logger
-tb_logger = Logger(logdir=os.path.join(args.store_root, args.store_name), flush_secs=2)
+# tb_logger = Logger(logdir=os.path.join(args.store_root, args.store_name), flush_secs=2)
 
 # Wrapper for combining base loss with PCC regularizer
 class CombinedLoss(nn.Module):
@@ -204,9 +203,6 @@ def run_trial(trial_seed):
     
     # Create folders for this trial
     prepare_folders(args)
-    
-    # Set up logging for this trial
-    trial_logger = Logger(logdir=os.path.join(args.store_root, args.store_name), flush_secs=2)
     
     # Reset best loss for this trial
     args.best_loss = 1e5
@@ -346,10 +342,6 @@ def run_trial(trial_seed):
         print("\n===== Specialized Metrics =====")
         for metric_name, value in metrics.items():
             print(f"{metric_name}: {value:.4f}")
-        
-        # Log metrics to tensorboard
-        for metric_name, value in metrics.items():
-            trial_logger.log_value(f'test/{metric_name}', value, 0)
         
         # Incorporate specialized metrics in the return values
         return test_loss_mse, test_loss_l1, test_loss_gmean, metrics
@@ -499,23 +491,23 @@ def run_trial(trial_seed):
               f"Val loss: MSE [{val_loss_mse:.4f}], L1 [{val_loss_l1:.4f}], G-Mean [{val_loss_gmean:.4f}]")
 
         # Log metrics to TensorBoard
-        trial_logger.log_value('train_loss', train_loss, epoch)
-        trial_logger.log_value('val/loss_mse', val_loss_mse, epoch)
-        trial_logger.log_value('val/loss_l1', val_loss_l1, epoch)
-        trial_logger.log_value('val/loss_gmean', val_loss_gmean, epoch)
+        # trial_logger.log_value('train_loss', train_loss, epoch)
+        # trial_logger.log_value('val/loss_mse', val_loss_mse, epoch)
+        # trial_logger.log_value('val/loss_l1', val_loss_l1, epoch)
+        # trial_logger.log_value('val/loss_gmean', val_loss_gmean, epoch)
         
-        for i, param_group in enumerate(optimizer.param_groups):
-            trial_logger.log_value(f'lr/group_{i}', param_group['lr'], epoch)
-        if args.bmse and not args.fix_noise_sigma:
+        # for i, param_group in enumerate(optimizer.param_groups):
+            # trial_logger.log_value(f'lr/group_{i}', param_group['lr'], epoch)
+        # if args.bmse and not args.fix_noise_sigma:
             # Correctly access noise_sigma, potentially through the wrapper
-            noise_sigma_val = None
-            if hasattr(criterion, 'noise_sigma'):
-                 noise_sigma_val = criterion.noise_sigma.item()
-            elif hasattr(criterion, 'base_criterion') and hasattr(criterion.base_criterion, 'noise_sigma'):
-                 noise_sigma_val = criterion.base_criterion.noise_sigma.item()
+            # noise_sigma_val = None
+            # if hasattr(criterion, 'noise_sigma'):
+                 # noise_sigma_val = criterion.noise_sigma.item()
+            # elif hasattr(criterion, 'base_criterion') and hasattr(criterion.base_criterion, 'noise_sigma'):
+                 # noise_sigma_val = criterion.base_criterion.noise_sigma.item()
                  
-            if noise_sigma_val is not None:
-                trial_logger.log_value('noise_sigma', noise_sigma_val, epoch)
+            # if noise_sigma_val is not None:
+                # trial_logger.log_value('noise_sigma', noise_sigma_val, epoch)
 
     # Test with best checkpoint after training
     print("=" * 120)
@@ -586,10 +578,6 @@ def run_trial(trial_seed):
     print("\n===== Specialized Metrics =====")
     for metric_name, value in metrics.items():
         print(f"{metric_name}: {value:.4f}")
-    
-    # Log metrics to tensorboard
-    for metric_name, value in metrics.items():
-        trial_logger.log_value(f'test/{metric_name}', value, 0)
     
     # Incorporate specialized metrics in the return values
     return test_loss_mse, test_loss_l1, test_loss_gmean, metrics
@@ -998,28 +986,24 @@ def threshold_metrics(
 
 def enhanced_save_checkpoint(args, state, is_best, is_final=False):
     """
-    Wrapper for save_checkpoint with essential error handling and logging
+    Optimized checkpoint saving - only saves best and final models
     """
     try:
         # Create checkpoint directory if it doesn't exist
         checkpoint_dir = os.path.join(args.store_root, args.store_name)
         os.makedirs(checkpoint_dir, exist_ok=True)
         
-        # Save the checkpoint
-        filename = os.path.join(checkpoint_dir, 'ckpt.last.pth.tar')
-        torch.save(state, filename + '.tmp')
-        shutil.move(filename + '.tmp', filename)
-        logging.info(f"Checkpoint saved to: {filename}")
-        
+        # Only save best and final checkpoints
         if is_best:
             best_filename = os.path.join(checkpoint_dir, 'ckpt.best.pth.tar')
-            shutil.copyfile(filename, best_filename + '.tmp')
+            torch.save(state, best_filename + '.tmp')
             shutil.move(best_filename + '.tmp', best_filename)
             logging.info(f"Best checkpoint saved to: {best_filename}")
         
         if is_final:
             final_filename = os.path.join(checkpoint_dir, 'ckpt.final.pth.tar')
-            shutil.copyfile(filename, final_filename)
+            torch.save(state, final_filename + '.tmp')
+            shutil.move(final_filename + '.tmp', final_filename)
             logging.info(f"Final checkpoint saved to: {final_filename}")
     
     except Exception as e:
