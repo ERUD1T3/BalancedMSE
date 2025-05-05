@@ -69,6 +69,9 @@ parser.add_argument('--reweight', type=str, default='none', choices=['none', 'sq
 parser.add_argument('--retrain_regressor', action='store_true', default=False,
                     help='whether to retrain last regression layer (regressor) of MLP')
 
+# PCC Regularization
+parser.add_argument('--pcc_lambda', type=float, default=0.0, help='Weight for the Pearson Correlation Coefficient (1-PCC) regularizer.')
+
 # ----- Training/optimization related arguments -----
 parser.add_argument('--dataset', type=str, required=True,
                     choices=['sep', 'sarcos', 'onp', 'bf', 'asc', 'ed'],
@@ -134,6 +137,8 @@ if args.bmse:
         args.store_name += f'_{gmm_suffix}'
     if args.fix_noise_sigma:
         args.store_name += '_fixNoise'
+if args.pcc_lambda > 0:
+    args.store_name += f'_pccL{args.pcc_lambda}'
 args.store_name = f"{args.dataset}_{args.model}{args.store_name}_{args.optimizer}_{args.loss}_lr{args.lr}_bs{args.batch_size}_wd{args.weight_decay}_epoch{args.epoch}"
 
 # Create folders for storing results
@@ -154,6 +159,33 @@ print(f"Store name: {args.store_name}")
 
 # Initialize TensorBoard logger
 tb_logger = Logger(logdir=os.path.join(args.store_root, args.store_name), flush_secs=2)
+
+# Wrapper for combining base loss with PCC regularizer
+class CombinedLoss(nn.Module):
+    def __init__(self, base_criterion, pcc_lambda):
+        super().__init__()
+        self.base_criterion = base_criterion
+        self.pcc_lambda = pcc_lambda
+        self.is_bmse = isinstance(base_criterion, (GAILoss, BMCLoss, BNILoss))
+
+        # Expose noise_sigma if the base criterion has it
+        if hasattr(self.base_criterion, 'noise_sigma'):
+            self.noise_sigma = self.base_criterion.noise_sigma
+
+    def forward(self, inputs, targets, weights=None):
+        # Calculate base loss
+        if self.is_bmse:
+            base_loss = self.base_criterion(inputs, targets)
+        else:
+            # Standard losses expect weights
+            base_loss = self.base_criterion(inputs, targets, weights)
+
+        # Calculate PCC loss (always needs weights, default to ones if None)
+        coreg_loss = weighted_coreg_loss(inputs, targets, weights)
+
+        # Combine losses
+        total_loss = base_loss + self.pcc_lambda * coreg_loss
+        return total_loss
 
 def run_trial(trial_seed):
     """
@@ -377,21 +409,18 @@ def run_trial(trial_seed):
     # Enable CUDA optimization
     cudnn.benchmark = True
 
-    # Set up loss function
+    # --- Set up loss function --- START ---
+    base_criterion = None
     if args.bmse:
         if args.imp == 'gai':
             gmm_path = args.gmm_file
             if not os.path.exists(gmm_path):
                 raise FileNotFoundError(f"Specified GMM file not found: {gmm_path}")
-
             print(f"Loading GMM parameters from: {gmm_path}")
-            criterion = GAILoss(args.init_noise_sigma, gmm_path, device=args.gpu)
-
-            # Add this line to move criterion to the same device as the model
-            if args.gpu is not None:
-                criterion.to(f'cuda:{args.gpu}')
+            device_for_loss = f'cuda:{args.gpu}' if args.gpu is not None else 'cpu'
+            base_criterion = GAILoss(args.init_noise_sigma, gmm_path, device=device_for_loss)
         elif args.imp == 'bmc':
-            criterion = BMCLoss(args.init_noise_sigma)
+            base_criterion = BMCLoss(args.init_noise_sigma)
         elif args.imp == 'bni':
             print("Fetching bucket info for BNI loss...")
             bucket_centers, bucket_weights = train_dataset.get_bucket_info(
@@ -399,20 +428,42 @@ def run_trial(trial_seed):
                 lds=args.lds, lds_kernel=args.lds_kernel,
                 lds_ks=args.lds_ks, lds_sigma=args.lds_sigma)
             print(f"Obtained {len(bucket_centers)} buckets for BNI.")
-            criterion = BNILoss(args.init_noise_sigma, bucket_centers, bucket_weights)
+            base_criterion = BNILoss(args.init_noise_sigma, bucket_centers, bucket_weights)
         else:
             raise NotImplementedError(f"BMSE implementation '{args.imp}' not supported.")
-
-        # Add noise sigma parameter to optimizer if not fixed
-        if not args.fix_noise_sigma:
-            if hasattr(criterion, 'noise_sigma'):
-                optimizer.add_param_group({'params': criterion.noise_sigma, 'lr': args.sigma_lr, 'name': 'noise_sigma'})
-                print(f"Added noise_sigma to optimizer with lr: {args.sigma_lr}")
-            else:
-                print(f"Warning: BMSE criterion {args.imp} does not have 'noise_sigma' attribute. Cannot optimize it.")
     else:
         # Use standard weighted loss functions
-        criterion = globals()[f"weighted_{args.loss}_loss"]
+        base_criterion = globals()[f"weighted_{args.loss}_loss"]
+
+    # Move base criterion to GPU if needed (standard losses are functions, BMSE are modules)
+    if isinstance(base_criterion, nn.Module) and args.gpu is not None:
+        base_criterion.to(f'cuda:{args.gpu}')
+
+    # Wrap with CombinedLoss if PCC regularization is enabled
+    if args.pcc_lambda > 0:
+        print(f"Combining base loss with PCC regularizer (lambda={args.pcc_lambda})")
+        criterion = CombinedLoss(base_criterion, args.pcc_lambda)
+        # Move the wrapper to GPU if necessary (contains the base criterion module)
+        if args.gpu is not None:
+            criterion.to(f'cuda:{args.gpu}')
+    else:
+        criterion = base_criterion # Use base criterion directly
+    # --- Set up loss function --- END ---
+
+    # Add noise sigma parameter to optimizer if not fixed
+    if args.bmse and not args.fix_noise_sigma:
+        # Check if noise_sigma exists either directly or within the wrapper
+        noise_sigma_param = None
+        if hasattr(criterion, 'noise_sigma'):
+            noise_sigma_param = criterion.noise_sigma
+        elif hasattr(criterion, 'base_criterion') and hasattr(criterion.base_criterion, 'noise_sigma'):
+             noise_sigma_param = criterion.base_criterion.noise_sigma
+             
+        if noise_sigma_param is not None:
+             optimizer.add_param_group({'params': noise_sigma_param, 'lr': args.sigma_lr, 'name': 'noise_sigma'})
+             print(f"Added noise_sigma to optimizer with lr: {args.sigma_lr}")
+        else:
+             print(f"Warning: BMSE criterion ({args.imp}) or wrapper does not expose 'noise_sigma'. Cannot optimize it.")
 
     # Training loop
     for epoch in range(args.start_epoch, args.epoch):
@@ -455,8 +506,16 @@ def run_trial(trial_seed):
         
         for i, param_group in enumerate(optimizer.param_groups):
             trial_logger.log_value(f'lr/group_{i}', param_group['lr'], epoch)
-        if args.bmse and not args.fix_noise_sigma and hasattr(criterion, 'noise_sigma'):
-            trial_logger.log_value('noise_sigma', criterion.noise_sigma.item(), epoch)
+        if args.bmse and not args.fix_noise_sigma:
+            # Correctly access noise_sigma, potentially through the wrapper
+            noise_sigma_val = None
+            if hasattr(criterion, 'noise_sigma'):
+                 noise_sigma_val = criterion.noise_sigma.item()
+            elif hasattr(criterion, 'base_criterion') and hasattr(criterion.base_criterion, 'noise_sigma'):
+                 noise_sigma_val = criterion.base_criterion.noise_sigma.item()
+                 
+            if noise_sigma_val is not None:
+                trial_logger.log_value('noise_sigma', noise_sigma_val, epoch)
 
     # Test with best checkpoint after training
     print("=" * 120)
@@ -628,6 +687,8 @@ def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Opt
     data_time = AverageMeter('Data', ':6.4f')
     
     loss_name = f'Loss ({args.imp.upper()})' if args.bmse else f'Loss ({args.loss.upper()})'
+    if args.pcc_lambda > 0:
+        loss_name += f' + {args.pcc_lambda}*(1-PCC)'
     losses = AverageMeter(loss_name, ':.4f')
     
     meters_to_display = [batch_time, data_time, losses]
@@ -665,10 +726,9 @@ def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Opt
         targets = targets.squeeze(-1) if targets.ndim > 1 and targets.shape[-1] == 1 else targets
         weights = weights.squeeze(-1) if weights.ndim > 1 and weights.shape[-1] == 1 else weights
 
-        if args.bmse:
-            loss = criterion(predictions, targets)
-        else:
-            loss = criterion(predictions, targets, weights)
+        # Calculate loss using the (potentially wrapped) criterion
+        loss = criterion(predictions, targets, weights)
+        # Note: CombinedLoss handles whether weights are needed by the base loss
 
         assert not (np.isnan(loss.item()) or loss.item() > 1e6), f"Loss explosion: {loss.item()}"
 
@@ -679,6 +739,8 @@ def train(train_loader: DataLoader, model: nn.Module, optimizer: torch.optim.Opt
         if args.bmse:
             if hasattr(criterion, 'noise_sigma') and criterion.noise_sigma is not None:
                 noise_var.update(criterion.noise_sigma.item() ** 2)
+            elif hasattr(criterion, 'base_criterion') and hasattr(criterion.base_criterion, 'noise_sigma') and criterion.base_criterion.noise_sigma is not None:
+                 noise_var.update(criterion.base_criterion.noise_sigma.item() ** 2)
             l2.update(F.mse_loss(predictions, targets).item())
 
         # Backward pass and optimization

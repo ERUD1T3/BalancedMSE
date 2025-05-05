@@ -174,3 +174,56 @@ def weighted_huber_loss(
     # Return mean of all elements
     loss = torch.mean(loss)
     return loss
+
+
+def weighted_coreg_loss(inputs: torch.Tensor, targets: torch.Tensor, weights: Optional[torch.Tensor] = None) -> torch.Tensor:
+    """
+    Compute 1 minus the weighted Pearson Correlation Coefficient (PCC) between inputs and targets.
+
+    Args:
+        inputs (torch.Tensor): Predicted values.
+        targets (torch.Tensor): Target values.
+        weights (Optional[torch.Tensor]): Optional weights for each element. If None, uniform weights are used.
+
+    Returns:
+        torch.Tensor: Scalar tensor representing 1 - PCC. Returns 1.0 if variance is zero.
+    """
+    if weights is None:
+        weights = torch.ones_like(inputs)
+
+    # Ensure weights have the same shape as inputs/targets for broadcasting
+    weights = weights.expand_as(inputs)
+
+    # Calculate weighted means
+    # Add epsilon to avoid division by zero if sum of weights is zero (e.g., empty batch)
+    epsilon = torch.finfo(weights.dtype).eps
+    sum_weights = torch.sum(weights) + epsilon
+    mean_inputs = torch.sum(weights * inputs) / sum_weights
+    mean_targets = torch.sum(weights * targets) / sum_weights
+
+    # Center the data
+    inputs_centered = inputs - mean_inputs
+    targets_centered = targets - mean_targets
+
+    # Compute weighted covariance
+    cov = torch.sum(weights * inputs_centered * targets_centered)
+
+    # Compute weighted variances
+    var_inputs = torch.sum(weights * torch.square(inputs_centered))
+    var_targets = torch.sum(weights * torch.square(targets_centered))
+
+    # Compute PCC
+    std_dev_product = torch.sqrt(var_inputs * var_targets)
+    
+    # Handle potential zero standard deviation
+    if std_dev_product < epsilon:
+        # If std dev product is close to zero, correlation is undefined or meaningless.
+        # Return 1.0 loss (representing zero correlation).
+        return torch.tensor(1.0, device=inputs.device, dtype=inputs.dtype) 
+        
+    pcc = cov / (std_dev_product + epsilon) # Add epsilon for numerical stability
+
+    # Clamp PCC to avoid potential numerical issues leading to values slightly outside [-1, 1]
+    pcc = torch.clamp(pcc, -1.0, 1.0)
+
+    return 1.0 - pcc
