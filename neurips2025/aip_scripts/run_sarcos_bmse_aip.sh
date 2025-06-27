@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1                    # Number of tasks
 #SBATCH --mem=64GB                    # Memory per node
 #SBATCH --time=infinite              # Time limit
-#SBATCH --partition=gpu1              # Partition
+#SBATCH --partition=gpu2              # Partition
 #SBATCH --gres=gpu:4                  # Number of GPUs per node
 #SBATCH --output=./logs/%x.%J.out     # Output file
 #SBATCH --error=./logs/%x.%J.err      # Error file
@@ -36,7 +36,7 @@ LR=5e-4
 WEIGHT_DECAY=0.1
 
 # BMSE / GAI specific settings - Updated for SARCOS dataset with appropriate K value
-GMM_FILE="/home1/jmoukpe2016/BalancedMSE/neurips2025/gmm/sarcos_gmm_K8.pkl"
+GMM_FILE="/home1/jmoukpe2016/BalancedMSE/neurips2025/gmm/sarcos_gmm_K4.pkl"
 DATA_DIR="/home1/jmoukpe2016/BalancedMSE/neurips2025/data"
 
 # Lower and upper thresholds for label range categorization (SARCOS specific)

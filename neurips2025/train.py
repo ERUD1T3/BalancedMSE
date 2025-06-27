@@ -24,7 +24,7 @@ from metrics import (
 # from debug_kde import debug_kde_visualization
 
 # make only gpu:1 visible
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 # Disable KMP warnings
 os.environ["KMP_WARNINGS"] = "FALSE"

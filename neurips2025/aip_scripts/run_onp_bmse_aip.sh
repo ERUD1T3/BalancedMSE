@@ -36,7 +36,7 @@ LR=5e-4
 WEIGHT_DECAY=0.1
 
 # BMSE / GAI specific settings - Updated for ONP dataset with appropriate K value
-GMM_FILE="/home1/jmoukpe2016/BalancedMSE/neurips2025/gmm/onp_gmm_K8.pkl"
+GMM_FILE="/home1/jmoukpe2016/BalancedMSE/neurips2025/gmm/onp_gmm_K4.pkl"
 DATA_DIR="/home1/jmoukpe2016/BalancedMSE/neurips2025/data"
 
 # Lower and upper thresholds for label range categorization (ONP specific)
