@@ -5,8 +5,8 @@
 #SBATCH --ntasks=1                    # Number of tasks
 #SBATCH --mem=64GB                    # Memory per node
 #SBATCH --time=infinite              # Time limit
-#SBATCH --partition=gpu1              # Partition
-#SBATCH --gres=gpu:4                  # Number of GPUs per node
+#SBATCH --partition=gpu2              # Partition
+#SBATCH --gres=gpu:1                  # Number of GPUs per node
 #SBATCH --output=./logs/%x.%J.out     # Output file
 #SBATCH --error=./logs/%x.%J.err      # Error file
 
@@ -27,7 +27,7 @@ mkdir -p logs
 SEEDS="456789 42 123 0 9999"
 DATASET="onp"
 BATCH_SIZE=8192
-EPOCHS=6000
+EPOCHS=5500
 MLP_HIDDENS="2048 128 1024 128 512 128 256 128"
 MLP_EMBED_DIM=128
 MLP_DROPOUT=0.1
@@ -36,7 +36,7 @@ LR=5e-4
 WEIGHT_DECAY=0.1
 
 # BMSE / GAI specific settings - Updated for ONP dataset with appropriate K value
-GMM_FILE="/home1/jmoukpe2016/BalancedMSE/neurips2025/gmm/onp_gmm_K4.pkl"
+GMM_FILE="/home1/jmoukpe2016/BalancedMSE/neurips2025/gmm/onp_gmm_K64.pkl"
 DATA_DIR="/home1/jmoukpe2016/BalancedMSE/neurips2025/data"
 
 # Lower and upper thresholds for label range categorization (ONP specific)

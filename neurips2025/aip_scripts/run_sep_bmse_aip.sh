@@ -6,7 +6,7 @@
 #SBATCH --mem=64GB                    # Memory per node
 #SBATCH --time=infinite              # Time limit
 #SBATCH --partition=gpu1          # Partition
-#SBATCH --gres=gpu:4                  # Number of GPUs per node
+#SBATCH --gres=gpu:1                 # Number of GPUs per node
 #SBATCH --output=./logs/%x.%J.out     # Output file
 #SBATCH --error=./logs/%x.%J.err      # Error file
 
@@ -27,7 +27,7 @@ mkdir -p logs
 SEEDS="456789 42 123 0 9999"
 DATASET="sep"
 BATCH_SIZE=200
-EPOCHS=6001
+EPOCHS=5700
 MLP_HIDDENS="512 32 256 32 128 32 64 32"
 MLP_EMBED_DIM=32
 MLP_DROPOUT=0.5
@@ -36,7 +36,7 @@ LR=5e-4
 WEIGHT_DECAY=1
 
 # BMSE / GAI specific settings - Updated to use K=64 based on GMM preprocessing
-GMM_FILE="/home1/jmoukpe2016/BalancedMSE/neurips2025/gmm/sep_gmm_K32.pkl"
+GMM_FILE="/home1/jmoukpe2016/BalancedMSE/neurips2025/gmm/sep_gmm_K64.pkl"
 DATA_DIR="/home1/jmoukpe2016/BalancedMSE/neurips2025/data"
 UPPER_THRESHOLD=2.30258509299
 
