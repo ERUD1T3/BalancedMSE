@@ -20,7 +20,7 @@ echo "Running on $SLURM_NPROCS processors."
 echo "Current working directory is $(pwd)"
 
 # Set K value
-K=64
+K=128
 
 # Define datasets to process
 datasets=("sep" "sarcos" "onp" "bf" "asc" "ed")

@@ -36,7 +36,7 @@ LR=5e-4
 WEIGHT_DECAY=1
 
 # BMSE / GAI specific settings - Updated to use K=64 based on GMM preprocessing
-GMM_FILE="/home1/jmoukpe2016/BalancedMSE/neurips2025/gmm/sep_gmm_K64.pkl"
+GMM_FILE="/home1/jmoukpe2016/BalancedMSE/neurips2025/gmm/sep_gmm_K128.pkl"
 DATA_DIR="/home1/jmoukpe2016/BalancedMSE/neurips2025/data"
 UPPER_THRESHOLD=2.30258509299
 
