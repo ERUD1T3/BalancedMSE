@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1                    # Number of tasks
 #SBATCH --mem=64GB                    # Memory per node
 #SBATCH --time=infinite              # Time limit
-#SBATCH --partition=gpu1              # Partition
+#SBATCH --partition=gpu2              # Partition
 #SBATCH --gres=gpu:1                  # Number of GPUs per node
 #SBATCH --output=./logs/%x.%J.out     # Output file
 #SBATCH --error=./logs/%x.%J.err      # Error file
@@ -24,10 +24,10 @@ echo "Current working directory is $(pwd)"
 mkdir -p logs
 
 # --- Configuration based on run_ed_bmse_chan.sh ---
-SEEDS="456789 42 123 0 9999"
+SEEDS="0 9999"
 DATASET="ed"
 BATCH_SIZE=2400
-EPOCHS=6000
+EPOCHS=5704
 MLP_HIDDENS="2048 128 1024 128 512 128 256 128"
 MLP_EMBED_DIM=128
 MLP_DROPOUT=0.2
@@ -36,7 +36,7 @@ LR=1e-4
 WEIGHT_DECAY=0.1
 
 # BMSE / GAI specific settings - Updated for ED dataset with appropriate K value
-GMM_FILE="/home1/jmoukpe2016/BalancedMSE/neurips2025/gmm/ed_gmm_K4.pkl"
+GMM_FILE="/home1/jmoukpe2016/BalancedMSE/neurips2025/gmm/ed_gmm_K16.pkl"
 DATA_DIR="/home1/jmoukpe2016/BalancedMSE/neurips2025/data"
 
 # Lower and upper thresholds for label range categorization (ED specific)
