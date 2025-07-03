@@ -49,7 +49,6 @@ class FDS(nn.Module):
         self.feature_dim = feature_dim
         self.bucket_num = bucket_num
         self.bucket_start = bucket_start
-        self.kernel_window = self._get_kernel_window(kernel, ks, sigma)
         self.half_ks = (ks - 1) // 2
         self.momentum = momentum
         self.start_update = start_update
@@ -64,6 +63,10 @@ class FDS(nn.Module):
         self.register_buffer('smoothed_mean_last_epoch', torch.zeros(bucket_num - bucket_start, feature_dim))
         self.register_buffer('smoothed_var_last_epoch', torch.ones(bucket_num - bucket_start, feature_dim))
         self.register_buffer('num_samples_tracked', torch.zeros(bucket_num - bucket_start))
+        
+        # Register kernel window as buffer so it follows module device
+        kernel_window = self._get_kernel_window(kernel, ks, sigma)
+        self.register_buffer('kernel_window', kernel_window)
 
     @staticmethod
     def _get_kernel_window(kernel: Literal['gaussian', 'triang', 'laplace'], 
@@ -98,7 +101,7 @@ class FDS(nn.Module):
             kernel_window = list(map(laplace, np.arange(-half_ks, half_ks + 1))) / sum(map(laplace, np.arange(-half_ks, half_ks + 1)))
 
         print(f'Using FDS: [{kernel.upper()}] ({ks}/{sigma})')
-        return torch.tensor(kernel_window, dtype=torch.float32).cuda()
+        return torch.tensor(kernel_window, dtype=torch.float32)
 
     def _update_last_epoch_stats(self) -> None:
         """
