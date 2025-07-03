@@ -27,7 +27,7 @@ mkdir -p logs
 SEEDS="456789 42 123 0 9999"
 DATASET="sep"
 BATCH_SIZE=200
-EPOCHS=5003
+EPOCHS=5012
 MLP_HIDDENS="512 32 256 32 128 32 64 32"
 MLP_EMBED_DIM=32
 MLP_DROPOUT=0.5
@@ -61,6 +61,10 @@ srun python train.py \
     --lds \
     --fds \
     --reweight sqrt_inv \
+    --lds_ks 5 \
+    --lds_sigma 2 \
+    --fds_ks 5 \
+    --fds_sigma 2 \
     --upper_threshold ${UPPER_THRESHOLD}
 
 if [ $? -eq 0 ]; then
