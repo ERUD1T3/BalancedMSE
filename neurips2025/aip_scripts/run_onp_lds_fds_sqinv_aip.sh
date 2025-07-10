@@ -27,7 +27,7 @@ mkdir -p logs
 SEEDS="456789 42 123 0 9999"
 DATASET="onp"
 BATCH_SIZE=8192
-EPOCHS=6011
+EPOCHS=5011
 MLP_HIDDENS="2048 128 1024 128 512 128 256 128"
 MLP_EMBED_DIM=128
 MLP_DROPOUT=0.1
@@ -62,10 +62,10 @@ srun python train.py \
     --lds \
     --fds \
     --reweight sqrt_inv \
-    --lds_ks 5 \
-    --lds_sigma 2 \
-    --fds_ks 5 \
-    --fds_sigma 2 \
+    --lds_ks 9 \
+    --lds_sigma 1 \
+    --fds_ks 9 \
+    --fds_sigma 1 \
     --lower_threshold ${LOWER_THRESHOLD} \
     --upper_threshold ${UPPER_THRESHOLD}
 
