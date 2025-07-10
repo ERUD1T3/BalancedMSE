@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1                    # Number of tasks
 #SBATCH --mem=64GB                    # Memory per node
 #SBATCH --time=infinite              # Time limit
-#SBATCH --partition=gpu2              # Partition
+#SBATCH --partition=gpu1              # Partition
 #SBATCH --gres=gpu:1                  # Number of GPUs per node
 #SBATCH --output=./logs/%x.%J.out     # Output file
 #SBATCH --error=./logs/%x.%J.err      # Error file
@@ -24,10 +24,10 @@ echo "Current working directory is $(pwd)"
 mkdir -p logs
 
 # --- Configuration based on run_sarcos_bmse_chan.sh ---
-SEEDS="42 123 0 9999"
+SEEDS="123 0 9999"
 DATASET="sarcos"
 BATCH_SIZE=14800
-EPOCHS=5710
+EPOCHS=5715
 MLP_HIDDENS="512 32 256 32 128 32 64 32"
 MLP_EMBED_DIM=32
 MLP_DROPOUT=0.2
@@ -49,7 +49,7 @@ echo "Using GMM file: ${GMM_FILE}"
 echo "Lower threshold: ${LOWER_THRESHOLD}, Upper threshold: ${UPPER_THRESHOLD}"
 echo "=================================="
 
-cd neurips2025
+# cd neurips2025
 
 srun python train.py \
     --seeds ${SEEDS} \

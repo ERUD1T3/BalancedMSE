@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=sep_lds_fds_sqinv_aip  # Job name
+#SBATCH --job-name=onp_lds_fds_sqinv_aip  # Job name
 #SBATCH --nodes=1                          # Number of nodes
 #SBATCH --ntasks=1                         # Number of tasks
 #SBATCH --mem=64GB                         # Memory per node
@@ -10,7 +10,7 @@
 #SBATCH --output=./logs/%x.%J.out         # Output file
 #SBATCH --error=./logs/%x.%J.err          # Error file
 
-echo "Starting SEP LDS FDS sqrt_inv training at date $(date)"
+echo "Starting ONP LDS FDS sqrt_inv training at date $(date)"
 
 echo "Running on hosts: $SLURM_NODELIST"
 
@@ -23,21 +23,22 @@ echo "Current working directory is $(pwd)"
 # Create logs directory if it doesn't exist
 mkdir -p logs
 
-# --- Configuration based on run_sep_lds_fds_sqinv_dell.sh ---
+# --- Configuration based on run_onp_lds_fds_sqinv_chan.sh ---
 SEEDS="456789 42 123 0 9999"
-DATASET="sep"
-BATCH_SIZE=200
-EPOCHS=5012
-MLP_HIDDENS="512 32 256 32 128 32 64 32"
-MLP_EMBED_DIM=32
-MLP_DROPOUT=0.5
+DATASET="onp"
+BATCH_SIZE=8192
+EPOCHS=6011
+MLP_HIDDENS="2048 128 1024 128 512 128 256 128"
+MLP_EMBED_DIM=128
+MLP_DROPOUT=0.1
 
 LR=5e-4
-WEIGHT_DECAY=1
+WEIGHT_DECAY=0.1
 
 # LDS/FDS specific settings
 DATA_DIR="/home1/jmoukpe2016/BalancedMSE/neurips2025/data"
-UPPER_THRESHOLD=2.30258509299
+LOWER_THRESHOLD=2.54406804435
+UPPER_THRESHOLD=4.54406804435
 
 # --- Run Training ---
 echo "Starting training for dataset: ${DATASET}, seeds: ${SEEDS}"
@@ -61,20 +62,21 @@ srun python train.py \
     --lds \
     --fds \
     --reweight sqrt_inv \
-    --lds_ks 9 \
+    --lds_ks 5 \
     --lds_sigma 2 \
-    --fds_ks 9 \
+    --fds_ks 5 \
     --fds_sigma 2 \
+    --lower_threshold ${LOWER_THRESHOLD} \
     --upper_threshold ${UPPER_THRESHOLD}
 
 if [ $? -eq 0 ]; then
-    echo "Successfully completed SEP LDS FDS sqrt_inv training"
+    echo "Successfully completed ONP LDS FDS sqrt_inv training"
 else
-    echo "Error in SEP LDS FDS sqrt_inv training"
+    echo "Error in ONP LDS FDS sqrt_inv training"
     exit 1
 fi
 
 echo "Training finished for seeds: ${SEEDS} at date $(date)"
 
 # Usage:
-# sbatch aip_scripts/run_sep_lds_fds_sqinv_aip.sh 
+# sbatch aip_scripts/run_onp_lds_fds_sqinv_aip.sh 
