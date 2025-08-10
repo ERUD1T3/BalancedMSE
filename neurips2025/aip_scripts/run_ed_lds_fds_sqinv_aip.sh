@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1                         # Number of tasks
 #SBATCH --mem=64GB                         # Memory per node
 #SBATCH --time=infinite                   # Time limit
-#SBATCH --partition=gpu2                  # Partition
+#SBATCH --partition=gpu1                  # Partition
 #SBATCH --gres=gpu:1                      # Number of GPUs per node
 #SBATCH --output=./logs/%x.%J.out         # Output file
 #SBATCH --error=./logs/%x.%J.err          # Error file
@@ -63,9 +63,9 @@ srun python train.py \
     --fds \
     --reweight sqrt_inv \
     --lds_ks 9 \
-    --lds_sigma 1 \
+    --lds_sigma 2 \
     --fds_ks 9 \
-    --fds_sigma 1 \
+    --fds_sigma 2 \
     --lower_threshold ${LOWER_THRESHOLD} \
     --upper_threshold ${UPPER_THRESHOLD}
 
